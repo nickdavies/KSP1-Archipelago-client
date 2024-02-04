@@ -4,8 +4,9 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 
-public static class APConsole
+public static class WinConsole
 {
+    // Code taken from: https://stackoverflow.com/a/48864902
     static public void Initialize(bool alwaysCreateNewConsole = true)
     {
         bool consoleAttached = true;
