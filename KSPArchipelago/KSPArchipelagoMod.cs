@@ -1,10 +1,10 @@
 ﻿using System;
-//using System.IO;
 using System.Windows;
 using System.Runtime.InteropServices;
 
 using UnityEngine;
 using KSP.UI.Screens;
+using UnityEngine.Diagnostics;
 
 
 
@@ -14,13 +14,20 @@ namespace KSPArchipelago
     public class KSPArchipelagoMod : MonoBehaviour
     {
 
-        [DllImport("kernel32.dll", EntryPoint = "AllocConsole", SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
-        private static extern int AllocConsole();
         private void Start()
         {
-            Debug.LogWarning("Start");
             DontDestroyOnLoad(this);
-            AllocConsole();
+
+            APConsole.Initialize();
+            Console.WriteLine("Setup console!");
+            string cmd = Console.ReadLine();
+            Console.WriteLine(cmd);
+        }
+
+        public void OnDestroy()
+        {
+            Debug.LogWarning("OnDestroy");
+            //FreeConsole();
         }
     }
 }
