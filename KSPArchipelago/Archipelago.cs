@@ -3,34 +3,23 @@ using System.Net;
 using System.Security.Cryptography;
 using Archipelago.MultiClient.Net;
 using Archipelago.MultiClient.Net.Enums;
+using KSPArchipelago;
 
 namespace Archipelago
 {
-    public class ArchipelagoWrapper
+    public class APConsole
     {
         public const string GameName = "KSP1";
-        private ArchipelagoSession session;
-
-        ArchipelagoWrapper()
-        {
-            session = null;
-        }
-
-        public void Login(string ip, UInt16 port, string slot_name, string pw = null)
-        {
-            var new_session = ArchipelagoSessionFactory.CreateSession("localhost", 38281);
-            new_session.TryConnectAndLogin(GameName, slot_name, ItemsHandlingFlags.AllItems);
-
-        }
-
-    }
-
-    public static class APConsole
-    {
         private const string connect_usage = "/connect <server address>[:<port>] <slot> [<password>]";
         private const int default_port = 38281;
+        private readonly KSPArchipelagoMod archipelagoMod;
 
-        public static void Run()
+        public APConsole(KSPArchipelagoMod mod)
+        {
+            this.archipelagoMod = mod;
+        }
+
+        public void Run()
         {
             while (true)
             {
@@ -51,7 +40,7 @@ namespace Archipelago
             }
         }
 
-        private static void RunConnect(string cmd)
+        private void RunConnect(string cmd)
         {
             string[] parts = cmd.Split(null, 4);
             if (parts.Length < 3)
@@ -82,6 +71,27 @@ namespace Archipelago
                 pw = parts[3];
             }
             Console.WriteLine("Connect: host=" + host + " port=" + port + " pw=" + pw);
+
+            var session = ArchipelagoSessionFactory.CreateSession(host, port);
+            LoginResult result = session.TryConnectAndLogin(GameName, slot_name, ItemsHandlingFlags.AllItems, password: pw);
+            if (result.Successful)
+            {
+                archipelagoMod.HandleConnect(session, (LoginSuccessful)result);
+            }
+            else
+            {
+                LoginFailure failure = (LoginFailure)result;
+                string errorMessage = $"Failed to Connect to {host}:{port} as {slot_name} with pw {pw}:";
+                foreach (string error in failure.Errors)
+                {
+                    errorMessage += $"\n    {error}";
+                }
+                foreach (ConnectionRefusedError error in failure.ErrorCodes)
+                {
+                    errorMessage += $"\n    {error}";
+                }
+                Console.WriteLine(errorMessage);
+            }
         }
     }
 }
