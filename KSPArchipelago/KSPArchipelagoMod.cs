@@ -14,6 +14,7 @@ using Archipelago.MultiClient.Net.Helpers;
 
 namespace KSPArchipelago
 {
+
     public static class KSPArchipelagoPartsManager
     {
         public static void ScrubTechTree()
@@ -86,8 +87,8 @@ namespace KSPArchipelago
     public class KSPArchipelagoMod : MonoBehaviour
     {
         private readonly object sessionLock = new object();
-        ArchipelagoSession session;
-        KSPEvents.KSPEventFactory eventFactory;
+        private ArchipelagoSession session;
+        private KSPEvents.KSPEventFactory eventFactory;
         private bool gameLoaded = false;
 
         private void Start()
@@ -233,6 +234,12 @@ namespace KSPArchipelago
         {
             lock (sessionLock)
             {
+                if (!gameLoaded)
+                {
+                    Console.WriteLine("Writing parts to ksp_parts.json");
+                    KSPPartDumper.PartDumper.DumpToFile(new System.IO.StreamWriter("ksp_parts.json"));
+                    Console.WriteLine("Successfully wrote parts to ksp_parts.json");
+                }
                 gameLoaded = true;
                 KSPArchipelagoPartsManager.ResetParts(session);
             }
