@@ -10,16 +10,19 @@
 
 	<ItemGroup>
 		<Reference Include="Assembly-CSharp">
-			<HintPath>D:\SteamLibrary\steamapps\common\Kerbal Space Program\KSP_x64_Data\Managed\Assembly-CSharp.dll</HintPath>
+			<HintPath>../../dlls/Assembly-CSharp.dll</HintPath>
 		</Reference>
 		<Reference Include="KSPAssets">
-			<HintPath>D:\SteamLibrary\steamapps\common\Kerbal Space Program\KSP_x64_Data\Managed\KSPAssets.dll</HintPath>
+			<HintPath>../../dlls/KSPAssets.dll</HintPath>
 		</Reference>
 		<Reference Include="UnityEngine">
-			<HintPath>D:\SteamLibrary\steamapps\common\Kerbal Space Program\KSP_x64_Data\Managed\UnityEngine.dll</HintPath>
+			<HintPath>../../dlls/UnityEngine.dll</HintPath>
 		</Reference>
 		<Reference Include="UnityEngine.CoreModule">
-			<HintPath>D:\SteamLibrary\steamapps\common\Kerbal Space Program\KSP_x64_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+			<HintPath>../../dlls/UnityEngine.CoreModule.dll</HintPath>
+		</Reference>
+		<Reference Include="UnityEngine.IMGUIModule">
+			<HintPath>../../dlls/UnityEngine.IMGUIModule.dll</HintPath>
 		</Reference>
 	</ItemGroup>
 

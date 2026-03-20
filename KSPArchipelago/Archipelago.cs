@@ -1,6 +1,6 @@
-﻿using System;
-using System.Net;
-using System.Security.Cryptography;
+using System;
+using System.Threading;
+
 using Archipelago.MultiClient.Net;
 using Archipelago.MultiClient.Net.Enums;
 using KSPArchipelago;
@@ -9,35 +9,56 @@ namespace Archipelago
 {
     public class APConsole
     {
-        public const string GameName = "KSP1";
-        private const string connect_usage = "/connect <server address>[:<port>] <slot> [<password>]";
-        private const int default_port = 38281;
-        private readonly KSPArchipelagoMod archipelagoMod;
+        // Must match KSP1World.game in the Python world.
+        public const string GameName = "Kerbal Space Program";
+
+        private const string ConnectUsage = "/connect <address>[:<port>] <slot> [<password>]";
+        private const int DefaultPort = 38281;
+
+        private readonly KSPArchipelagoMod mod;
+
+        // Stored for reconnection.
+        private string lastHost;
+        private int lastPort;
+        private string lastSlot;
+        private string lastPassword;
+        private ArchipelagoSession currentSession;
+
+        // Backoff delays in seconds: 5, 10, 20, 30, 30, ...
+        private static readonly int[] BackoffDelays = { 5, 10, 20, 30 };
+        private int backoffIndex = 0;
+        private bool reconnecting = false;
 
         public APConsole(KSPArchipelagoMod mod)
         {
-            this.archipelagoMod = mod;
+            this.mod = mod;
         }
 
         public void Run()
         {
             while (true)
             {
-                string cmd = Console.ReadLine();
-                Console.WriteLine(cmd);
                 try
                 {
+                    string cmd = Console.ReadLine();
+                    if (string.IsNullOrEmpty(cmd)) continue;
+                    Console.WriteLine(cmd);
                     if (cmd.StartsWith("/connect"))
-                    {
                         RunConnect(cmd);
-                    }
+                    else if (cmd == "/disconnect")
+                        Disconnect();
                 }
-                catch
+                catch (Exception ex)
                 {
-                    Console.WriteLine("Failed to handle command: ");
+                    Console.WriteLine($"Command error: {ex.Message}");
                 }
-
             }
+        }
+
+        // Called directly by ArchipelagoUI to avoid re-parsing a command string.
+        public void RunConnectDirect(string host, int port, string slot, string password)
+        {
+            Connect(host, port, slot, password);
         }
 
         private void RunConnect(string cmd)
@@ -45,53 +66,91 @@ namespace Archipelago
             string[] parts = cmd.Split(null, 4);
             if (parts.Length < 3)
             {
-                Console.WriteLine("Invalid /connect command usage: " + connect_usage);
+                Console.WriteLine("Usage: " + ConnectUsage);
                 return;
             }
 
-            // We explicitly add TCP here because it then won't default to any port
-            // and we can determine if one was provided or not for the user.
-            Uri host_port = new Uri("tcp://" + parts[1]);
-            string host = host_port.Host;
-            int port;
-            if (host_port.IsDefaultPort)
-            {
-                Console.WriteLine("No port provided assuming " + default_port);
-                port = default_port;
-            }
-            else
-            {
-                port = host_port.Port;
-            }
+            Uri hostPort = new Uri("tcp://" + parts[1]);
+            string host = hostPort.Host;
+            int port = hostPort.IsDefaultPort ? DefaultPort : hostPort.Port;
+            string slot = parts[2];
+            string password = parts.Length == 4 ? parts[3] : null;
 
-            string slot_name = parts[2];
-            string pw = null;
-            if (parts.Length == 4)
-            {
-                pw = parts[3];
-            }
-            Console.WriteLine("Connect: host=" + host + " port=" + port + " pw=" + pw);
+            Connect(host, port, slot, password);
+        }
 
+        private void Connect(string host, int port, string slot, string password)
+        {
+            Console.WriteLine($"[KSP-AP] Connecting: {host}:{port} slot={slot}");
             var session = ArchipelagoSessionFactory.CreateSession(host, port);
-            LoginResult result = session.TryConnectAndLogin(GameName, slot_name, ItemsHandlingFlags.AllItems, password: pw);
+            LoginResult result = session.TryConnectAndLogin(
+                GameName, slot, ItemsHandlingFlags.AllItems, password: password);
+
             if (result.Successful)
             {
-                archipelagoMod.HandleConnect(session, (LoginSuccessful)result);
+                // Store params for reconnection.
+                lastHost = host;
+                lastPort = port;
+                lastSlot = slot;
+                lastPassword = password;
+                currentSession = session;
+                backoffIndex = 0;
+                reconnecting = false;
+
+                // Hook disconnection.
+                session.Socket.SocketClosed += OnSocketClosed;
+
+                Console.WriteLine("[KSP-AP] Connected successfully.");
+                mod.HandleConnect(session, (LoginSuccessful)result, slot);
             }
             else
             {
                 LoginFailure failure = (LoginFailure)result;
-                string errorMessage = $"Failed to Connect to {host}:{port} as {slot_name} with pw {pw}:";
+                string msg = $"[KSP-AP] Connection failed to {host}:{port} as {slot}:";
                 foreach (string error in failure.Errors)
-                {
-                    errorMessage += $"\n    {error}";
-                }
-                foreach (ConnectionRefusedError error in failure.ErrorCodes)
-                {
-                    errorMessage += $"\n    {error}";
-                }
-                Console.WriteLine(errorMessage);
+                    msg += $"\n  {error}";
+                foreach (ConnectionRefusedError code in failure.ErrorCodes)
+                    msg += $"\n  {code}";
+                Console.WriteLine(msg);
             }
+        }
+
+        private void Disconnect()
+        {
+            reconnecting = false;
+            currentSession = null;
+            mod.HandleDisconnect();
+            Console.WriteLine("[KSP-AP] Disconnected.");
+        }
+
+        private void OnSocketClosed(string reason)
+        {
+            Console.WriteLine($"[KSP-AP] Server disconnected: {reason}");
+            mod.HandleDisconnect();
+            if (!reconnecting && lastHost != null)
+                ScheduleReconnect();
+        }
+
+        private void ScheduleReconnect()
+        {
+            reconnecting = true;
+            int delay = BackoffDelays[Math.Min(backoffIndex, BackoffDelays.Length - 1)];
+            backoffIndex++;
+            Console.WriteLine($"[KSP-AP] Reconnecting in {delay}s...");
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                Thread.Sleep(delay * 1000);
+                if (reconnecting)
+                    AttemptReconnect();
+            });
+        }
+
+        private void AttemptReconnect()
+        {
+            Console.WriteLine($"[KSP-AP] Attempting reconnect ({backoffIndex}/{BackoffDelays.Length})...");
+            Connect(lastHost, lastPort, lastSlot, lastPassword);
+            if (!mod.IsConnected)
+                ScheduleReconnect(); // keep trying
         }
     }
 }

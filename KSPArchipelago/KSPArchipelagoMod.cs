@@ -1,12 +1,8 @@
-﻿using System;
-using System.Threading;
-using System.Windows;
-using System.Runtime.InteropServices;
+using System;
 using System.Collections.Generic;
+using System.Threading;
 
 using UnityEngine;
-using KSP.UI.Screens;
-using UnityEngine.Diagnostics;
 using Archipelago.MultiClient.Net;
 using Archipelago.MultiClient.Net.Models;
 using Archipelago.MultiClient.Net.Helpers;
@@ -14,65 +10,78 @@ using Archipelago.MultiClient.Net.Helpers;
 
 namespace KSPArchipelago
 {
-
     public static class KSPArchipelagoPartsManager
     {
+        private static readonly Dictionary<string, float> SciencePackAmounts = new Dictionary<string, float>
+        {
+            { "Science Pack 10",  10f },
+            { "Science Pack 25",  25f },
+            { "Science Pack 50",  50f },
+            { "Science Pack 100", 100f },
+            { "Science Pack 250", 250f },
+        };
+
+        public static void GiveItem(string itemName)
+        {
+            // Science packs: add science points directly.
+            if (SciencePackAmounts.TryGetValue(itemName, out float amount))
+            {
+                if (ResearchAndDevelopment.Instance != null)
+                    ResearchAndDevelopment.Instance.AddScience(amount, TransactionReasons.Cheating);
+                ScreenMessages.PostScreenMessage(
+                    $"AP: Received {itemName} (+{amount} science)", 4f, ScreenMessageStyle.UPPER_CENTER);
+                return;
+            }
+
+            // Other filler items: just notify.
+            if (itemName == "Engineering Report" || itemName == "Cosmetic Unlock")
+            {
+                ScreenMessages.PostScreenMessage(
+                    $"AP: Received {itemName}", 4f, ScreenMessageStyle.UPPER_CENTER);
+                return;
+            }
+
+            // Assume everything else is a part name.
+            AvailablePart part = PartLoader.getPartInfoByName(itemName);
+            if (part != null)
+            {
+                ResearchAndDevelopment.AddExperimentalPart(part);
+                ScreenMessages.PostScreenMessage(
+                    $"AP: Unlocked {part.title}", 4f, ScreenMessageStyle.UPPER_CENTER);
+            }
+            else
+            {
+                Debug.LogWarning($"[KSP-AP] GiveItem: unknown item '{itemName}'");
+            }
+        }
+
         public static void ScrubTechTree()
         {
-            Console.WriteLine("Resetting Tech Tree");
             foreach (AvailablePart part in PartLoader.LoadedPartsList)
             {
-                Console.WriteLine("Set requirements to inaccessable for: " + part.name);
                 if (part.TechRequired != "inaccessable")
-                {
                     part.TechRequired = "inaccessable";
-                }
             }
         }
 
         public static void SetExperimentalParts(ArchipelagoSession session)
         {
-            if (session != null)
-            {
-                HashSet<string> partNames = new HashSet<string>();
-                foreach (NetworkItem item in session.Items.AllItemsReceived)
-                {
-                    string partName = session.Items.GetItemName(item.Item);
-                    if (partName != null)
-                    {
-                        partNames.Add(partName);
-                    }
-                    else
-                    {
-                        Console.WriteLine("Error! got unknown part: " + item);
-                    }
-                }
-                foreach (AvailablePart part in PartLoader.LoadedPartsList)
-                {
-                    if (partNames.Contains(part.name))
-                    {
-                        ResearchAndDevelopment.AddExperimentalPart(part);
-                        Console.WriteLine("Bulk enabling part: " + part.name);
-                    }
-                    else
-                    {
-                        ResearchAndDevelopment.RemoveExperimentalPart(part);
-                        Console.WriteLine("Bulk removing part: " + part.name);
-                    }
-                }
-            }
-        }
+            if (session == null) return;
 
-        public static void GivePart(string partName)
-        {
-            AvailablePart part = PartLoader.getPartInfoByName(partName);
-            if (part != null)
+            var receivedParts = new HashSet<string>();
+            foreach (NetworkItem item in session.Items.AllItemsReceived)
             {
-                ResearchAndDevelopment.AddExperimentalPart(part);
+                string name = session.Items.GetItemName(item.Item);
+                if (name != null)
+                    receivedParts.Add(name);
             }
-            else
+
+            foreach (AvailablePart part in PartLoader.LoadedPartsList)
             {
-                Console.WriteLine("Error! Asked to give unknown part " + partName);
+                if (receivedParts.Contains(part.name))
+                    ResearchAndDevelopment.AddExperimentalPart(part);
+                else
+                    ResearchAndDevelopment.RemoveExperimentalPart(part);
             }
         }
 
@@ -88,181 +97,120 @@ namespace KSPArchipelago
     {
         private readonly object sessionLock = new object();
         private ArchipelagoSession session;
-        private KSPEvents.KSPEventFactory eventFactory;
+        private MissionTracker missionTracker;
         private bool gameLoaded = false;
+        public Archipelago.APConsole Console { get; private set; }
+
+        // Slot data from AP server.
+        public int Goal { get; private set; }
+        public int Difficulty { get; private set; }
+
+        // Expose connection state for the UI.
+        public bool IsConnected => session != null;
+        public int ItemsReceivedCount { get; private set; }
+        public int LocationsCheckedCount { get; private set; }
+        public string ConnectedSlot { get; private set; }
+
+        // Internal notification callback for UI.
+        public event Action<string> OnItemReceived;
 
         private void Start()
         {
             DontDestroyOnLoad(this);
 
             WinConsole.Initialize();
-            Console.WriteLine("Setup console!");
+            Debug.Log("[KSP-AP] Mod started.");
 
-            Archipelago.APConsole console = new Archipelago.APConsole(this);
-            ThreadStart work = new ThreadStart(console.Run);
-            Thread thread = new Thread(work);
+            missionTracker = new MissionTracker();
+
+            Console = new Archipelago.APConsole(this);
+            ThreadStart work = new ThreadStart(Console.Run);
+            Thread thread = new Thread(work) { IsBackground = true };
             thread.Start();
 
-            RegisterKSPEvents();
+            GameEvents.onGameStateLoad.Add(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
+        }
+
+        private void Update()
+        {
+            // All GameEvent callbacks and Update() run on the Unity main thread,
+            // so no lock needed here.
+            missionTracker?.Update();
         }
 
         public void HandleItemReceived(ReceivedItemsHelper receivedItemsHelper)
         {
             lock (sessionLock)
             {
-                if (gameLoaded)
+                if (!gameLoaded) return;
+                var item = receivedItemsHelper.DequeueItem();
+                string itemName = session.Items.GetItemName(item.Item);
+                if (itemName == null)
                 {
-                    var item = receivedItemsHelper.DequeueItem();
-                    string partName = session.Items.GetItemName(item.Item);
-                    if (partName != null)
-                    {
-                        KSPArchipelagoPartsManager.GivePart(partName);
-                    }
-                    else
-                    {
-                        Console.WriteLine("Error! got unknown part: " + item);
-                    }
+                    Debug.LogWarning($"[KSP-AP] Received item with unknown ID: {item.Item}");
+                    return;
                 }
+                KSPArchipelagoPartsManager.GiveItem(itemName);
+                ItemsReceivedCount++;
+                OnItemReceived?.Invoke(itemName);
             }
         }
 
-        public void HandleConnect(ArchipelagoSession newSession, LoginSuccessful loginData)
+        public void HandleConnect(ArchipelagoSession newSession, LoginSuccessful loginData, string slotName)
         {
-            Console.WriteLine("Successfully connected!");
+            Debug.Log("[KSP-AP] Connected to AP server.");
             lock (sessionLock)
             {
                 session = newSession;
 
-                // TODO: get from slot data
-                Dictionary<string, bool> experiments = new Dictionary<string, bool>
-                {
-                    {"asteroidSample", true},
-                    {"surfaceSample", true},
-                    {"evaReport", true},
-                    {"crewReport", true},
-                    {"mysteryGoo", true},
-                    {"mobileMaterialsLab", true},
-                    {"temperatureScan", true},
-                    {"barometerScan", true},
-                    {"gravityScan", true},
-                    {"seismicScan", true},
-                    {"atmosphereAnalysis", true},
-                    {"recovery", false},
-                };
-                Dictionary<string, bool> bodies = new Dictionary<string, bool>
-                {
-                    {"Kerbol", true},
-                    {"Moho", true},
-                    {"Eve", true},
-                    {"Gilly", true},
-                    {"Kerbin", true},
-                    {"Mun", true},
-                    {"Minmus", true},
-                    {"Duna", true},
-                    {"Ike", true},
-                    {"Dres", true},
-                    {"Jool", true},
-                    {"Laythe", true},
-                    {"Vall", true},
-                    {"Tylo", true},
-                    {"Bop", true},
-                    {"Pol", true},
-                    {"Eeloo", true},
-                };
-
-                this.eventFactory = new KSPEvents.KSPEventFactory(experiments, bodies);
+                // Parse slot data.
+                Goal = loginData.SlotData.TryGetValue("goal", out object goalObj)
+                    ? Convert.ToInt32(goalObj) : 0;
+                Difficulty = loginData.SlotData.TryGetValue("difficulty", out object diffObj)
+                    ? Convert.ToInt32(diffObj) : 1;
+                ConnectedSlot = slotName;
+                ItemsReceivedCount = 0;
+                LocationsCheckedCount = 0;
 
                 session.Items.ItemReceived += HandleItemReceived;
+
+                missionTracker.Initialize(session, Difficulty, () => LocationsCheckedCount++);
+
                 if (gameLoaded)
                 {
                     KSPArchipelagoPartsManager.ResetParts(session);
-                    ResyncScience();
                 }
             }
         }
 
-        private void CompleteLocation(KSPEvents.IKSPEvent e)
+        public void HandleDisconnect()
         {
-            if (e != null)
+            lock (sessionLock)
             {
-                return;
-            }
-            string locationName = e.APLocation();
-            string game = session.ConnectionInfo.Game;
-            long locationId = session.Locations.GetLocationIdFromName(game, locationName);
-            if (locationId == -1)
-            {
-                Console.WriteLine($"Error! Unknown location '{locationName}' in game '{game}' found");
-                return;
-            }
-            session.Locations.CompleteLocationChecks(locationId);
-        }
-
-        private void onScienceRecieved(float amount, ScienceSubject subject, ProtoVessel vessel, bool unknown)
-        {
-            KSPEvents.IKSPEvent e = eventFactory.FromScienceSubject(subject);
-            if (e != null)
-            {
-                CompleteLocation(e);
+                missionTracker?.Shutdown();
+                session = null;
+                ConnectedSlot = null;
             }
         }
 
-        private void ResyncScience()
-        {
-            string game = session.ConnectionInfo.Game;
-            List<long> locations = new List<long>();
-            foreach (ScienceSubject subject in ResearchAndDevelopment.GetSubjects())
-            {
-                KSPEvents.IKSPEvent e = eventFactory.FromScienceSubject(subject);
-                if (e != null)
-                {
-                    continue;
-                }
-                string locationName = e.APLocation();
-                long locationId = session.Locations.GetLocationIdFromName(game, locationName);
-                if (locationId == -1)
-                {
-                    Console.WriteLine($"Error! Unknown location '{locationName}' in game '{game}' found");
-                    continue;
-                }
-                locations.Add(locationId);
-            }
-            session.Locations.CompleteLocationChecks(locations.ToArray());
-        }
-
-        private void ResetParts(ConfigNode config)
+        private void OnGameStateLoad(ConfigNode config)
         {
             lock (sessionLock)
             {
                 if (!gameLoaded)
                 {
-                    Console.WriteLine("Writing parts to ksp_parts.json");
+                    Debug.Log("[KSP-AP] Dumping part data to ksp_parts.json");
                     KSPPartDumper.PartDumper.DumpToFile(new System.IO.StreamWriter("ksp_parts.json"));
-                    Console.WriteLine("Successfully wrote parts to ksp_parts.json");
                 }
                 gameLoaded = true;
                 KSPArchipelagoPartsManager.ResetParts(session);
             }
         }
 
-        private void RegisterKSPEvents()
-        {
-            // GameEvents.OnPartPurchased.Add(new EventData<AvailablePart>.OnEvent(this.onPartResearched));
-            GameEvents.OnScienceRecieved.Add(new EventData<float, ScienceSubject, ProtoVessel, bool>.OnEvent(onScienceRecieved));
-            GameEvents.onGameStateLoad.Add(new EventData<ConfigNode>.OnEvent(ResetParts));
-            //GameEvents.onFlagPlant.Add();
-        }
-        private void UnregisterKSPEvents()
-        {
-            GameEvents.OnScienceRecieved.Remove(new EventData<float, ScienceSubject, ProtoVessel, bool>.OnEvent(onScienceRecieved));
-            GameEvents.onGameStateLoad.Remove(new EventData<ConfigNode>.OnEvent(ResetParts));
-            //GameEvents.onFlagPlant.Remove();
-        }
-
         public void OnDestroy()
         {
-            Debug.LogWarning("OnDestroy");
-            UnregisterKSPEvents();
+            GameEvents.onGameStateLoad.Remove(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
+            missionTracker?.Shutdown();
         }
     }
 }
