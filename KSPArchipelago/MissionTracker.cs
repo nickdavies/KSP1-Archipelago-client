@@ -51,7 +51,7 @@ namespace KSPArchipelago
         };
 
         // Tech tree node_id → display_name  (from tech_tree.py — must stay in sync).
-        private static readonly Dictionary<string, string> TechDisplayNames = new Dictionary<string, string>
+        internal static readonly Dictionary<string, string> TechDisplayNames = new Dictionary<string, string>
         {
             { "basicRocketry",             "Basic Rocketry" },
             { "generalRocketry",           "General Rocketry" },
@@ -426,6 +426,8 @@ namespace KSPArchipelago
             }
             for (int slot = 1; slot <= 5; slot++)
                 ReportLocation($"{displayName} {slot}");
+
+            UnityEngine.Object.FindObjectOfType<TechTreeScout>()?.OnNodeChecked(nodeId);
         }
     }
 }
