@@ -200,8 +200,7 @@ namespace KSPArchipelago
             GUILayout.Space(4);
             if (IsConnectionRequired)
             {
-                GUILayout.Label("Connect to play.",
-                    new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter });
+                GUILayout.Label("Connect to play.");
             }
             else if (GUILayout.Button("Close"))
             {

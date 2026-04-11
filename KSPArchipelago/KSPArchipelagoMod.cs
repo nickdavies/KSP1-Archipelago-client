@@ -47,12 +47,13 @@ namespace KSPArchipelago
             if (part != null)
             {
                 ResearchAndDevelopment.AddExperimentalPart(part);
+                Debug.Log($"[KSP-AP] Unlocked part '{itemName}' ({part.title})");
                 ScreenMessages.PostScreenMessage(
                     $"AP: Unlocked {part.title}", 4f, ScreenMessageStyle.UPPER_CENTER);
             }
             else
             {
-                Debug.LogWarning($"[KSP-AP] GiveItem: unknown item '{itemName}'");
+                Debug.LogWarning($"[KSP-AP] GiveItem: part not found '{itemName}'");
             }
         }
 
@@ -76,12 +77,30 @@ namespace KSPArchipelago
                     receivedParts.Add(item.ItemName);
             }
 
+            int unlocked = 0;
+            int notFound = 0;
             foreach (AvailablePart part in PartLoader.LoadedPartsList)
             {
                 if (receivedParts.Contains(part.name))
+                {
                     ResearchAndDevelopment.AddExperimentalPart(part);
+                    unlocked++;
+                }
                 else
+                {
                     ResearchAndDevelopment.RemoveExperimentalPart(part);
+                }
+            }
+            notFound = receivedParts.Count - unlocked;
+            Debug.Log($"[KSP-AP] SetExperimentalParts: {unlocked} unlocked, {notFound} not matched from {receivedParts.Count} received items");
+            if (notFound > 0)
+            {
+                // Log which received items didn't match any loaded part.
+                foreach (string name in receivedParts)
+                {
+                    if (PartLoader.getPartInfoByName(name) == null)
+                        Debug.LogWarning($"[KSP-AP] SetExperimentalParts: no loaded part for '{name}'");
+                }
             }
         }
 
@@ -107,6 +126,7 @@ namespace KSPArchipelago
 
         // Expose connection state for the UI.
         public bool IsConnected => session != null;
+        internal ArchipelagoSession Session => session;
         public int ItemsReceivedCount { get; private set; }
         public int LocationsCheckedCount { get; private set; }
         public string ConnectedSlot { get; private set; }
