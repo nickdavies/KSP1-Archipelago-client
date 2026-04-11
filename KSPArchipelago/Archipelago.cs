@@ -4,6 +4,7 @@ using System.Threading;
 using Archipelago.MultiClient.Net;
 using Archipelago.MultiClient.Net.Enums;
 using KSPArchipelago;
+using UnityEngine;
 
 namespace Archipelago
 {
@@ -32,6 +33,13 @@ namespace Archipelago
         public APConsole(KSPArchipelagoMod mod)
         {
             this.mod = mod;
+        }
+
+        /// <summary>Log to both Unity (Player.log) and the debug console.</summary>
+        private static void Log(string msg)
+        {
+            Debug.Log(msg);
+            Console.WriteLine(msg);
         }
 
         public void Run()
@@ -81,37 +89,44 @@ namespace Archipelago
 
         private void Connect(string host, int port, string slot, string password)
         {
-            Console.WriteLine($"[KSP-AP] Connecting: {host}:{port} slot={slot}");
-            var session = ArchipelagoSessionFactory.CreateSession(host, port);
-            LoginResult result = session.TryConnectAndLogin(
-                GameName, slot, ItemsHandlingFlags.AllItems, password: password);
-
-            if (result.Successful)
+            Log($"[KSP-AP] Connecting: {host}:{port} slot={slot}");
+            try
             {
-                // Store params for reconnection.
-                lastHost = host;
-                lastPort = port;
-                lastSlot = slot;
-                lastPassword = password;
-                currentSession = session;
-                backoffIndex = 0;
-                reconnecting = false;
+                var session = ArchipelagoSessionFactory.CreateSession(host, port);
+                LoginResult result = session.TryConnectAndLogin(
+                    GameName, slot, ItemsHandlingFlags.AllItems, password: password);
 
-                // Hook disconnection.
-                session.Socket.SocketClosed += OnSocketClosed;
+                if (result.Successful)
+                {
+                    // Store params for reconnection.
+                    lastHost = host;
+                    lastPort = port;
+                    lastSlot = slot;
+                    lastPassword = password;
+                    currentSession = session;
+                    backoffIndex = 0;
+                    reconnecting = false;
 
-                Console.WriteLine("[KSP-AP] Connected successfully.");
-                mod.HandleConnect(session, (LoginSuccessful)result, slot);
+                    // Hook disconnection.
+                    session.Socket.SocketClosed += OnSocketClosed;
+
+                    Log("[KSP-AP] Connected successfully.");
+                    mod.HandleConnect(session, (LoginSuccessful)result, slot);
+                }
+                else
+                {
+                    LoginFailure failure = (LoginFailure)result;
+                    string msg = $"[KSP-AP] Connection failed to {host}:{port} as {slot}:";
+                    foreach (string error in failure.Errors)
+                        msg += $"\n  {error}";
+                    foreach (ConnectionRefusedError code in failure.ErrorCodes)
+                        msg += $"\n  {code}";
+                    Log(msg);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                LoginFailure failure = (LoginFailure)result;
-                string msg = $"[KSP-AP] Connection failed to {host}:{port} as {slot}:";
-                foreach (string error in failure.Errors)
-                    msg += $"\n  {error}";
-                foreach (ConnectionRefusedError code in failure.ErrorCodes)
-                    msg += $"\n  {code}";
-                Console.WriteLine(msg);
+                Log($"[KSP-AP] Connection error: {ex}");
             }
         }
 
@@ -120,12 +135,12 @@ namespace Archipelago
             reconnecting = false;
             currentSession = null;
             mod.HandleDisconnect();
-            Console.WriteLine("[KSP-AP] Disconnected.");
+            Log("[KSP-AP] Disconnected.");
         }
 
         private void OnSocketClosed(string reason)
         {
-            Console.WriteLine($"[KSP-AP] Server disconnected: {reason}");
+            Log($"[KSP-AP] Server disconnected: {reason}");
             mod.HandleDisconnect();
             if (!reconnecting && lastHost != null)
                 ScheduleReconnect();
@@ -136,7 +151,7 @@ namespace Archipelago
             reconnecting = true;
             int delay = BackoffDelays[Math.Min(backoffIndex, BackoffDelays.Length - 1)];
             backoffIndex++;
-            Console.WriteLine($"[KSP-AP] Reconnecting in {delay}s...");
+            Log($"[KSP-AP] Reconnecting in {delay}s...");
             ThreadPool.QueueUserWorkItem(_ =>
             {
                 Thread.Sleep(delay * 1000);
@@ -147,7 +162,7 @@ namespace Archipelago
 
         private void AttemptReconnect()
         {
-            Console.WriteLine($"[KSP-AP] Attempting reconnect ({backoffIndex}/{BackoffDelays.Length})...");
+            Log($"[KSP-AP] Attempting reconnect ({backoffIndex}/{BackoffDelays.Length})...");
             Connect(lastHost, lastPort, lastSlot, lastPassword);
             if (!mod.IsConnected)
                 ScheduleReconnect(); // keep trying

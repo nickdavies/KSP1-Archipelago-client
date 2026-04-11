@@ -9,6 +9,12 @@ public static class WinConsole
     // Code taken from: https://stackoverflow.com/a/48864902
     static public void Initialize(bool alwaysCreateNewConsole = true)
     {
+        // Win32 console APIs don't exist on Linux/macOS — stdout/stderr
+        // already work there, so skip the P/Invoke entirely.
+        if (Environment.OSVersion.Platform == PlatformID.Unix
+            || Environment.OSVersion.Platform == PlatformID.MacOSX)
+            return;
+
         bool consoleAttached = true;
         if (alwaysCreateNewConsole
             || (AttachConsole(ATTACH_PARRENT) == 0

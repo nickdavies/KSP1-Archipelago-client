@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using UnityEngine;
 using KSP.UI.Screens;
 
@@ -26,18 +27,46 @@ namespace KSPArchipelago
         private string slot = "";
         private string password = "";
 
+        private static string ConfigPath
+        {
+            get
+            {
+                string folder = HighLogic.SaveFolder ?? "default";
+                return Path.Combine(KSPUtil.ApplicationRootPath, "saves", folder, "ksp_ap_connection.cfg");
+            }
+        }
+
         private void Start()
         {
             instance = this;
-            // Find the mod (persists across scenes via DontDestroyOnLoad).
             mod = FindObjectOfType<KSPArchipelagoMod>();
+
+            LoadConnectionSettings();
 
             GameEvents.onGUIApplicationLauncherReady.Add(AddToolbarButton);
             GameEvents.onGUIApplicationLauncherUnreadifying.Add(RemoveToolbarButton);
         }
 
+        private void Update()
+        {
+            if (mod == null) return;
+            bool shouldLock = !mod.IsConnected
+                && HighLogic.LoadedScene == GameScenes.SPACECENTER;
+            if (shouldLock)
+            {
+                InputLockManager.SetControlLock(
+                    ControlTypes.KSC_FACILITIES, "AP_NotConnected");
+                showPanel = true;
+            }
+            else
+            {
+                InputLockManager.RemoveControlLock("AP_NotConnected");
+            }
+        }
+
         private void OnDestroy()
         {
+            InputLockManager.RemoveControlLock("AP_NotConnected");
             GameEvents.onGUIApplicationLauncherReady.Remove(AddToolbarButton);
             GameEvents.onGUIApplicationLauncherUnreadifying.Remove(RemoveToolbarButton);
             RemoveToolbarButton();
@@ -134,8 +163,14 @@ namespace KSPArchipelago
             GUILayout.EndHorizontal();
 
             GUILayout.Space(8);
-            if (GUILayout.Button("Connect"))
+            bool enterPressed = Event.current.type == EventType.KeyDown
+                && (Event.current.keyCode == KeyCode.Return
+                    || Event.current.keyCode == KeyCode.KeypadEnter);
+            if (GUILayout.Button("Connect") || enterPressed)
+            {
                 TriggerConnect();
+                if (enterPressed) Event.current.Use();
+            }
         }
 
         private void TriggerConnect()
@@ -148,18 +183,70 @@ namespace KSPArchipelago
             }
             if (mod?.Console == null) return;
 
-            // Run on a background thread so the UI stays responsive.
+            SaveConnectionSettings();
+
             string h = host, s = slot, pw = string.IsNullOrEmpty(password) ? null : password;
             int p = port;
             var console = mod.Console;
             System.Threading.ThreadPool.QueueUserWorkItem(_ => console.RunConnectDirect(h, p, s, pw));
         }
 
+        private bool IsConnectionRequired =>
+            mod != null && !mod.IsConnected
+            && HighLogic.LoadedScene == GameScenes.SPACECENTER;
+
         private void DrawCloseButton()
         {
             GUILayout.Space(4);
-            if (GUILayout.Button("Close"))
+            if (IsConnectionRequired)
+            {
+                GUILayout.Label("Connect to play.",
+                    new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter });
+            }
+            else if (GUILayout.Button("Close"))
+            {
                 showPanel = false;
+                if (toolbarButton != null)
+                    toolbarButton.SetFalse(false);
+            }
+        }
+
+        private void LoadConnectionSettings()
+        {
+            if (!File.Exists(ConfigPath)) return;
+            try
+            {
+                var node = ConfigNode.Load(ConfigPath);
+                if (node == null) return;
+                var conn = node.GetNode("CONNECTION");
+                if (conn == null) return;
+                host = conn.GetValue("host") ?? host;
+                portStr = conn.GetValue("port") ?? portStr;
+                slot = conn.GetValue("slot") ?? slot;
+                password = conn.GetValue("password") ?? password;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[KSP-AP] Failed to load connection settings: {e.Message}");
+            }
+        }
+
+        private void SaveConnectionSettings()
+        {
+            try
+            {
+                var node = new ConfigNode();
+                var conn = node.AddNode("CONNECTION");
+                conn.AddValue("host", host);
+                conn.AddValue("port", portStr);
+                conn.AddValue("slot", slot);
+                conn.AddValue("password", password);
+                node.Save(ConfigPath);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[KSP-AP] Failed to save connection settings: {e.Message}");
+            }
         }
     }
 }

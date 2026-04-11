@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 
@@ -69,11 +70,10 @@ namespace KSPArchipelago
             if (session == null) return;
 
             var receivedParts = new HashSet<string>();
-            foreach (NetworkItem item in session.Items.AllItemsReceived)
+            foreach (var item in session.Items.AllItemsReceived)
             {
-                string name = session.Items.GetItemName(item.Item);
-                if (name != null)
-                    receivedParts.Add(name);
+                if (item.ItemName != null)
+                    receivedParts.Add(item.ItemName);
             }
 
             foreach (AvailablePart part in PartLoader.LoadedPartsList)
@@ -114,6 +114,9 @@ namespace KSPArchipelago
         // Internal notification callback for UI.
         public event Action<string> OnItemReceived;
 
+        // Items received on the network thread, processed on the main thread.
+        private readonly ConcurrentQueue<string> pendingItems = new ConcurrentQueue<string>();
+
         private void Start()
         {
             DontDestroyOnLoad(this);
@@ -129,31 +132,33 @@ namespace KSPArchipelago
             thread.Start();
 
             GameEvents.onGameStateLoad.Add(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
+            GameEvents.onGameSceneLoadRequested.Add(OnSceneChange);
         }
 
         private void Update()
         {
-            // All GameEvent callbacks and Update() run on the Unity main thread,
-            // so no lock needed here.
+            // Process items queued by the network thread on the main thread,
+            // where Unity API calls are safe.
+            while (pendingItems.TryDequeue(out string itemName))
+            {
+                KSPArchipelagoPartsManager.GiveItem(itemName);
+                ItemsReceivedCount++;
+                OnItemReceived?.Invoke(itemName);
+            }
+
             missionTracker?.Update();
         }
 
         public void HandleItemReceived(ReceivedItemsHelper receivedItemsHelper)
         {
-            lock (sessionLock)
+            var item = receivedItemsHelper.DequeueItem();
+            string itemName = item.ItemName;
+            if (itemName == null)
             {
-                if (!gameLoaded) return;
-                var item = receivedItemsHelper.DequeueItem();
-                string itemName = session.Items.GetItemName(item.Item);
-                if (itemName == null)
-                {
-                    Debug.LogWarning($"[KSP-AP] Received item with unknown ID: {item.Item}");
-                    return;
-                }
-                KSPArchipelagoPartsManager.GiveItem(itemName);
-                ItemsReceivedCount++;
-                OnItemReceived?.Invoke(itemName);
+                Debug.LogWarning($"[KSP-AP] Received item with unknown ID: {item.ItemId}");
+                return;
             }
+            pendingItems.Enqueue(itemName);
         }
 
         public void HandleConnect(ArchipelagoSession newSession, LoginSuccessful loginData, string slotName)
@@ -197,19 +202,24 @@ namespace KSPArchipelago
         {
             lock (sessionLock)
             {
-                if (!gameLoaded)
-                {
-                    Debug.Log("[KSP-AP] Dumping part data to ksp_parts.json");
-                    KSPPartDumper.PartDumper.DumpToFile(new System.IO.StreamWriter("ksp_parts.json"));
-                }
                 gameLoaded = true;
                 KSPArchipelagoPartsManager.ResetParts(session);
+            }
+        }
+
+        private void OnSceneChange(GameScenes scene)
+        {
+            if (scene == GameScenes.MAINMENU && IsConnected)
+            {
+                Debug.Log("[KSP-AP] Returning to main menu — disconnecting.");
+                HandleDisconnect();
             }
         }
 
         public void OnDestroy()
         {
             GameEvents.onGameStateLoad.Remove(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
+            GameEvents.onGameSceneLoadRequested.Remove(OnSceneChange);
             missionTracker?.Shutdown();
         }
     }
