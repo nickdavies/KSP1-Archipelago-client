@@ -80,7 +80,7 @@ namespace KSPArchipelago
 
             if (!rdOpen) return;
 
-            if (!hasScoutedThisSession || needsRescount)
+            if ((!hasScoutedThisSession || needsRescount) && IsTechTreeReady())
             {
                 needsRescount = false;
                 hasScoutedThisSession = true;
@@ -88,6 +88,26 @@ namespace KSPArchipelago
             }
 
             UpdateSelectedNode();
+        }
+
+        /// <summary>
+        /// Returns true once RDController has loaded at least 75% of the tech nodes
+        /// we track as AP locations. Guards against scouting before the tree is populated.
+        /// </summary>
+        private bool IsTechTreeReady()
+        {
+            var nodes = RDController.Instance?.nodes;
+            if (nodes == null) return false;
+
+            int matched = 0;
+            foreach (RDNode node in nodes)
+            {
+                if (node?.tech != null && MissionTracker.TechDisplayNames.ContainsKey(node.tech.techID))
+                    matched++;
+            }
+
+            int threshold = (int)(MissionTracker.TechDisplayNames.Count * 0.75);
+            return matched >= threshold;
         }
 
         private void ScoutPurchasableNodes()
@@ -206,20 +226,7 @@ namespace KSPArchipelago
                     if (node?.tech == null) continue;
                     if (node.IsResearched) continue;
 
-                    bool allParentsResearched = true;
-                    if (node.parents != null)
-                    {
-                        foreach (RDNode.Parent p in node.parents)
-                        {
-                            if (p?.parent?.node != null && !p.parent.node.IsResearched)
-                            {
-                                allParentsResearched = false;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (allParentsResearched)
+                    if (IsNodePurchasable(node))
                         result.Add(node.tech.techID);
                 }
             }
@@ -228,6 +235,33 @@ namespace KSPArchipelago
                 Debug.LogWarning($"[KSP-AP] FindPurchasableNodeIds failed: {ex}");
             }
             return result;
+        }
+
+        /// <summary>
+        /// Checks whether a node's prerequisite parents are satisfied.
+        /// Respects AnyParentToUnlock: when true, only one parent must be researched.
+        /// </summary>
+        private static bool IsNodePurchasable(RDNode node)
+        {
+            if (node.parents == null || node.parents.Length == 0)
+                return true;
+
+            bool anyResearched = false;
+            bool anyUnresearched = false;
+
+            foreach (RDNode.Parent p in node.parents)
+            {
+                if (p?.parent?.node == null) continue;
+                if (p.parent.node.IsResearched)
+                    anyResearched = true;
+                else
+                    anyUnresearched = true;
+            }
+
+            if (node.AnyParentToUnlock)
+                return anyResearched || !anyUnresearched;
+            else
+                return !anyUnresearched;
         }
 
         private void UpdateSelectedNode()
