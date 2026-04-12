@@ -123,6 +123,7 @@ namespace KSPArchipelago
         private KspApState state;
         private string statePath;
         private bool initialized = false;
+        private int techSlotsPerNode = 5;
         private Action onLocationReported;
 
         // ------------------------------------------------------------------
@@ -133,10 +134,11 @@ namespace KSPArchipelago
         /// Call after a successful AP connection. Loads persisted state, registers
         /// all KSP events, and immediately reports Starting Inventory locations.
         /// </summary>
-        public void Initialize(ArchipelagoSession newSession, int difficulty, Action onLocationReported = null)
+        public void Initialize(ArchipelagoSession newSession, int difficulty, int techSlots = 5, Action onLocationReported = null)
         {
             session = newSession;
             this.onLocationReported = onLocationReported;
+            techSlotsPerNode = techSlots;
             LoadState();
             RegisterEvents();
             ReportStartingInventory(difficulty);
@@ -520,7 +522,7 @@ namespace KSPArchipelago
                 Debug.LogWarning($"[KSP-AP] Researched unknown tech node: '{nodeId}'");
                 return;
             }
-            for (int slot = 1; slot <= 5; slot++)
+            for (int slot = 1; slot <= techSlotsPerNode; slot++)
                 ReportLocation($"{displayName} {slot}");
 
             UnityEngine.Object.FindObjectOfType<TechTreeScout>()?.OnNodeChecked(nodeId);
