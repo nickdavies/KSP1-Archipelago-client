@@ -14,10 +14,14 @@ namespace KSPArchipelago
         public HashSet<long> CheckedLocationIds = new HashSet<long>();
         // "BodyName|EventName" → number of slots already reported (0..check_scale)
         public Dictionary<string, int> BodyEventCounts = new Dictionary<string, int>();
-        public bool KscStartsReported = false;
+        public bool StartingInventoryReported = false;
         public bool KerbinStagingDone = false;
+        public bool KerbinFirstLaunchDone = false;
+        public bool KerbinFirstLandingDone = false;
         // Altitude thresholds (in metres) already reported
         public HashSet<int> AltitudesReachedMeters = new HashSet<int>();
+        // KSC biome names already reported
+        public HashSet<string> KscBiomesVisited = new HashSet<string>();
     }
 
     /// <summary>
@@ -41,13 +45,30 @@ namespace KSPArchipelago
             { "Laythe", 3 }, { "Vall",   3 }, { "Tylo",  3 }, { "Eeloo", 3 },
         };
 
-        // Number of KSC Start locations by difficulty value (from slot data).
-        private static readonly Dictionary<int, int> DifficultyKscCount = new Dictionary<int, int>
+        // Number of Starting Inventory locations by difficulty value.
+        private static readonly Dictionary<int, int> DifficultyStartingCount = new Dictionary<int, int>
         {
             { 0, 20 }, // casual
             { 1, 15 }, // normal
             { 2, 10 }, // expert
             { 3,  5 }, // insane
+        };
+
+        // KSC biome strings as they appear after "KerbinSrfLanded" in ScienceSubject.id
+        // → AP location name to report.
+        private static readonly Dictionary<string, string> KscBiomeToLocation = new Dictionary<string, string>
+        {
+            {"LaunchPad",        "KSC LaunchPad"},
+            {"Runway",           "KSC Runway"},
+            {"Administration",   "KSC Administration"},
+            {"AstronautComplex", "KSC Astronaut Complex"},
+            {"FlagPole",         "KSC Flag Pole"},
+            {"SPH",              "KSC SPH"},
+            {"VAB",              "KSC VAB"},
+            {"TrackingStation",  "KSC Tracking Station"},
+            {"MissionControl",   "KSC Mission Control"},
+            {"Crawlerway",       "KSC Crawlerway"},
+            {"R&D",              "KSC R&D"},
         };
 
         // Tech tree node_id → display_name  (from tech_tree.py — must stay in sync).
@@ -110,7 +131,7 @@ namespace KSPArchipelago
 
         /// <summary>
         /// Call after a successful AP connection. Loads persisted state, registers
-        /// all KSP events, and immediately reports KSC Start locations.
+        /// all KSP events, and immediately reports Starting Inventory locations.
         /// </summary>
         public void Initialize(ArchipelagoSession newSession, int difficulty, Action onLocationReported = null)
         {
@@ -118,7 +139,7 @@ namespace KSPArchipelago
             this.onLocationReported = onLocationReported;
             LoadState();
             RegisterEvents();
-            ReportKscStarts(difficulty);
+            ReportStartingInventory(difficulty);
             initialized = true;
         }
 
@@ -224,6 +245,10 @@ namespace KSPArchipelago
             GameEvents.OnTechnologyResearched.Add(
                 new EventData<GameEvents.HostTargetAction<RDTech, RDTech.OperationResult>>.OnEvent(OnTechResearched));
 
+            // KSP misspells "Received" as "Recieved"
+            GameEvents.OnScienceRecieved.Add(
+                new EventData<float, ScienceSubject, ProtoVessel, bool>.OnEvent(OnScienceReceived));
+
             GameEvents.onGameStateLoad.Add(
                 new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
         }
@@ -253,6 +278,9 @@ namespace KSPArchipelago
                 new EventData<GameEvents.FromToAction<Part, Part>>.OnEvent(OnCrewOnEva));
             GameEvents.OnTechnologyResearched.Remove(
                 new EventData<GameEvents.HostTargetAction<RDTech, RDTech.OperationResult>>.OnEvent(OnTechResearched));
+
+            GameEvents.OnScienceRecieved.Remove(
+                new EventData<float, ScienceSubject, ProtoVessel, bool>.OnEvent(OnScienceReceived));
 
             GameEvents.onGameStateLoad.Remove(
                 new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
@@ -305,17 +333,61 @@ namespace KSPArchipelago
         }
 
         // ------------------------------------------------------------------
-        // KSC starts
+        // Starting inventory (zero-requirement locations reported on connect)
         // ------------------------------------------------------------------
 
-        public void ReportKscStarts(int difficulty)
+        public void ReportStartingInventory(int difficulty)
         {
-            if (state.KscStartsReported) return;
-            int n = DifficultyKscCount.TryGetValue(difficulty, out int c) ? c : 15;
+            if (state.StartingInventoryReported) return;
+            int n = DifficultyStartingCount.TryGetValue(difficulty, out int c) ? c : 15;
             for (int i = 1; i <= n; i++)
-                ReportLocation($"KSC Start {i}");
-            state.KscStartsReported = true;
+                ReportLocation($"Starting Inventory {i}");
+            state.StartingInventoryReported = true;
             SaveState();
+        }
+
+        // ------------------------------------------------------------------
+        // KSC biome science detection
+        // ------------------------------------------------------------------
+
+        private void OnScienceReceived(float amount, ScienceSubject subject, ProtoVessel vessel, bool reverseEngineered)
+        {
+            if (subject == null) return;
+            string id = subject.id;
+
+            // Format: {experiment}@{body}{situation}{biome}
+            // We want science done on Kerbin's surface at KSC biomes.
+            const string kerbinLanded = "KerbinSrfLanded";
+            int idx = id.IndexOf(kerbinLanded, StringComparison.Ordinal);
+            if (idx < 0) return;
+
+            string biome = id.Substring(idx + kerbinLanded.Length);
+            if (string.IsNullOrEmpty(biome)) return;
+
+            Debug.Log($"[KSP-AP] KSC science: subject='{id}', biome='{biome}'");
+
+            // Try exact match first, then StartsWith for sub-biomes
+            string locationName = null;
+            if (KscBiomeToLocation.TryGetValue(biome, out string exact))
+            {
+                locationName = exact;
+            }
+            else
+            {
+                // Sub-biome fallback: "VABMainBuilding" → starts with "VAB"
+                foreach (var kvp in KscBiomeToLocation)
+                {
+                    if (biome.StartsWith(kvp.Key, StringComparison.Ordinal))
+                    {
+                        locationName = kvp.Value;
+                        break;
+                    }
+                }
+            }
+
+            if (locationName == null) return;
+            if (!state.KscBiomesVisited.Add(locationName)) return; // already reported
+            ReportLocation(locationName);
         }
 
         // ------------------------------------------------------------------
@@ -373,9 +445,33 @@ namespace KSPArchipelago
 
         private void OnSituationChange(GameEvents.HostedFromToAction<Vessel, Vessel.Situations> data)
         {
-            // Used only for Kerbin Splashdown (onLand does not fire for SPLASHED).
-            if (data.to == Vessel.Situations.SPLASHED && data.host.mainBody?.name == "Kerbin")
+            Vessel v = data.host;
+            string body = v?.mainBody?.name;
+
+            // Kerbin Splashdown (onLand does not fire for SPLASHED)
+            if (data.to == Vessel.Situations.SPLASHED && body == "Kerbin")
                 ReportLocation("Kerbin Splashdown");
+
+            // First Launch: PRELAUNCH → FLYING or SUB_ORBITAL on Kerbin
+            if (body == "Kerbin"
+                && data.from == Vessel.Situations.PRELAUNCH
+                && (data.to == Vessel.Situations.FLYING || data.to == Vessel.Situations.SUB_ORBITAL)
+                && !state.KerbinFirstLaunchDone)
+            {
+                state.KerbinFirstLaunchDone = true;
+                ReportLocation("Kerbin First Launch");
+            }
+
+            // First Landing: transition to LANDED on Kerbin from FLYING or SUB_ORBITAL
+            // (not from PRELAUNCH — that's sitting on the pad)
+            if (body == "Kerbin"
+                && data.to == Vessel.Situations.LANDED
+                && (data.from == Vessel.Situations.FLYING || data.from == Vessel.Situations.SUB_ORBITAL)
+                && !state.KerbinFirstLandingDone)
+            {
+                state.KerbinFirstLandingDone = true;
+                ReportLocation("Kerbin First Landing");
+            }
         }
 
         private void OnFlagPlant(Vessel flagVessel)
