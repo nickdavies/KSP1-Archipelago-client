@@ -35,14 +35,13 @@ namespace KSPArchipelago
         // Kerbin altitude check thresholds in metres (location names use km).
         private static readonly int[] KerbinAltThresholds = { 5000, 15000, 25000, 35000, 45000, 55000, 70000 };
 
-        // Number of AP location slots per mission event, per body.
+        // Number of AP location slots per event type (must match EVENT_SCALE in locations.py).
         // Kerbin is not in this table — it uses fixed individual location names.
-        private static readonly Dictionary<string, int> BodyCheckScale = new Dictionary<string, int>
+        private static readonly Dictionary<string, int> EventScale = new Dictionary<string, int>
         {
-            { "Mun",    1 }, { "Minmus", 1 }, { "Gilly", 1 }, { "Ike",  1 }, { "Kerbol", 1 },
-            { "Moho",   2 }, { "Eve",    2 }, { "Duna",  2 }, { "Dres", 2 }, { "Jool",   2 },
-            { "Bop",    2 }, { "Pol",    2 },
-            { "Laythe", 3 }, { "Vall",   3 }, { "Tylo",  3 }, { "Eeloo", 3 },
+            { "Flyby", 1 }, { "SOI Leave", 1 }, { "Orbit", 1 },
+            { "Landing", 2 }, { "Crewed Landing", 2 }, { "Flag Plant", 2 },
+            { "Return", 3 }, { "Sample Return", 3 },
         };
 
         // Number of Starting Inventory locations by difficulty value.
@@ -317,12 +316,12 @@ namespace KSPArchipelago
             }
         }
 
-        // Reports the next unchecked slot for a body/event pair (up to check_scale).
+        // Reports the next unchecked slot for a body/event pair (up to event scale).
         private void ReportBodyEvent(string bodyName, string eventName)
         {
-            if (!BodyCheckScale.TryGetValue(bodyName, out int scale))
+            if (!EventScale.TryGetValue(eventName, out int scale))
             {
-                Debug.LogWarning($"[KSP-AP] No check_scale for body '{bodyName}'");
+                Debug.LogWarning($"[KSP-AP] Unknown event type: '{eventName}'");
                 return;
             }
             string key = $"{bodyName}|{eventName}";
@@ -448,10 +447,11 @@ namespace KSPArchipelago
         private void OnSituationChange(GameEvents.HostedFromToAction<Vessel, Vessel.Situations> data)
         {
             Vessel v = data.host;
+            if (v == null) return;
             string body = v?.mainBody?.name;
 
-            // Kerbin Splashdown (onLand does not fire for SPLASHED)
-            if (data.to == Vessel.Situations.SPLASHED && body == "Kerbin")
+            // Kerbin Splashdown — skip EVA vessels (onLand does not fire for SPLASHED)
+            if (data.to == Vessel.Situations.SPLASHED && body == "Kerbin" && !v.isEVA)
                 ReportLocation("Kerbin Splashdown");
 
             // First Launch: PRELAUNCH → FLYING or SUB_ORBITAL on Kerbin
