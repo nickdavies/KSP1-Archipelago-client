@@ -135,7 +135,8 @@ namespace KSPArchipelago
                     if (!MissionTracker.TechDisplayNames.TryGetValue(nodeId, out string displayName))
                         continue;
 
-                    for (int slot = 1; slot <= 5; slot++)
+                    int maxSlots = mod.TechSlotsPerNode;
+                    for (int slot = 1; slot <= maxSlots; slot++)
                     {
                         long locId = session.Locations.GetLocationIdFromName(gameName, $"{displayName} {slot}");
                         if (locId < 0 || !missing.Contains(locId)) continue;

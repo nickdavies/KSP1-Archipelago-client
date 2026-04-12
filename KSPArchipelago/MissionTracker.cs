@@ -70,59 +70,87 @@ namespace KSPArchipelago
             {"R&D",              "KSC R&D"},
         };
 
-        // Tech tree node_id → display_name  (from tech_tree.py — must stay in sync).
+        // Tech tree node_id → display_name  (from data/tech_tree.json — must stay in sync).
+        // 62 purchasable stock nodes across tiers 1-8.
         internal static readonly Dictionary<string, string> TechDisplayNames = new Dictionary<string, string>
         {
-            { "basicRocketry",             "Basic Rocketry" },
-            { "generalRocketry",           "General Rocketry" },
-            { "survivability",             "Survivability" },
-            { "stability",                 "Stability" },
-            { "advRocketry",               "Advanced Rocketry" },
-            { "spaceExploration",          "Space Exploration" },
-            { "advConstruction",           "Advanced Construction" },
-            { "fieldScience",              "Field Science" },
-            { "basicScience",              "Basic Science" },
-            { "propulsionSystems",         "Propulsion Systems" },
-            { "advExploration",            "Advanced Exploration" },
-            { "landing",                   "Landing" },
-            { "advAerodynamics",           "Advanced Aerodynamics" },
-            { "scienceTech",               "Science Tech" },
-            { "generalConstruction",       "General Construction" },
-            { "heavyRocketry",             "Heavy Rocketry" },
-            { "highAltitudeFlight",        "High Altitude Flight" },
-            { "advLanding",                "Advanced Landing" },
-            { "actuators",                 "Actuators" },
-            { "electronics",               "Electronics" },
-            { "ionPropulsion",             "Ion Propulsion" },
-            { "precisionEngineering",      "Precision Engineering" },
-            { "heavierRocketry",           "Heavier Rocketry" },
-            { "nuclearPropulsion",         "Nuclear Propulsion" },
-            { "specializedControl",        "Specialized Control" },
-            { "unmannedTech",              "Unmanned Tech" },
-            { "advScienceTech",            "Advanced Science Tech" },
-            { "specializedConstruction",   "Specialized Construction" },
-            { "largeElectrics",            "Large Electrics" },
-            { "composites",               "Composites" },
-            { "veryHeavyRocketry",         "Very Heavy Rocketry" },
-            { "experimentalElectrics",     "Experimental Electrics" },
-            { "highPerformanceFuelSystems","High Performance Fuel Systems" },
-            { "advUnmannedTech",           "Advanced Unmanned Tech" },
-            { "robotics",                  "Robotics" },
-            { "experimentalMotors",        "Experimental Motors" },
-            { "aerospaceComposites",       "Aerospace Composites" },
-            { "fieldResearch",             "Field Research" },
-            { "nanolathing",               "Nanolathing" },
-            { "advancedMotors",            "Advanced Motors" },
-            { "highPerformanceSystems",    "High Performance Systems" },
-            { "metaMaterials",             "Meta-Materials" },
-            { "ultimateRocketry",          "Ultimate Rocketry" },
+            // Tier 1
+            { "basicRocketry",                   "Basic Rocketry" },
+            { "engineering101",                  "Engineering 101" },
+            // Tier 2
+            { "generalRocketry",                 "General Rocketry" },
+            { "stability",                       "Stability" },
+            { "survivability",                   "Survivability" },
+            // Tier 3
+            { "advRocketry",                     "Advanced Rocketry" },
+            { "aviation",                        "Aviation" },
+            { "basicScience",                    "Basic Science" },
+            { "flightControl",                   "Flight Control" },
+            { "generalConstruction",             "General Construction" },
+            // Tier 4
+            { "advConstruction",                 "Advanced Construction" },
+            { "advFlightControl",                "Advanced Flight Control" },
+            { "aerodynamicSystems",              "Aerodynamics" },
+            { "electrics",                       "Electrics" },
+            { "fuelSystems",                     "Fuel Systems" },
+            { "heavyRocketry",                   "Heavy Rocketry" },
+            { "landing",                         "Landing" },
+            { "miniaturization",                 "Miniaturization" },
+            { "propulsionSystems",               "Propulsion Systems" },
+            { "spaceExploration",                "Space Exploration" },
+            // Tier 5
+            { "actuators",                       "Actuators" },
+            { "advAerodynamics",                 "Advanced Aerodynamics" },
+            { "advElectrics",                    "Advanced Electrics" },
+            { "advExploration",                  "Advanced Exploration" },
+            { "advFuelSystems",                  "Adv. Fuel Systems" },
+            { "advLanding",                      "Advanced Landing" },
+            { "commandModules",                  "Command Modules" },
+            { "heavierRocketry",                 "Heavier Rocketry" },
+            { "precisionEngineering",            "Precision Engineering" },
+            { "precisionPropulsion",             "Precision Propulsion" },
+            { "specializedConstruction",         "Specialized Construction" },
+            { "specializedControl",              "Specialized Control" },
+            { "supersonicFlight",                "Supersonic Flight" },
+            // Tier 6
+            { "advMetalworks",                   "Advanced MetalWorks" },
+            { "composites",                      "Composites" },
+            { "electronics",                     "Electronics" },
+            { "fieldScience",                    "Field Science" },
+            { "heavyAerodynamics",               "Heavy Aerodynamics" },
+            { "heavyLanding",                    "Heavy Landing" },
+            { "highAltitudeFlight",              "High Altitude Flight" },
+            { "largeElectrics",                  "High-Power Electrics" },
+            { "largeVolumeContainment",          "Large Volume Containment" },
+            { "nuclearPropulsion",               "Nuclear Propulsion" },
+            { "scienceTech",                     "Scanning Tech" },
+            { "unmannedTech",                    "Unmanned Tech" },
+            // Tier 7
+            { "advScienceTech",                  "Advanced Science Tech" },
+            { "advUnmanned",                     "Advanced Unmanned Tech" },
+            { "advancedMotors",                  "Advanced Motors" },
+            { "automation",                      "Automation" },
+            { "experimentalAerodynamics",        "Experimental Aerodynamics" },
+            { "highPerformanceFuelSystems",      "High-Performance Fuel Systems" },
+            { "hypersonicFlight",                "Hypersonic Flight" },
+            { "ionPropulsion",                   "Ion Propulsion" },
+            { "metaMaterials",                   "Meta-Materials" },
+            { "nanolathing",                     "Nanolathing" },
+            { "specializedElectrics",            "Specialized Electrics" },
+            { "veryHeavyRocketry",               "Very Heavy Rocketry" },
+            // Tier 8
+            { "aerospaceTech",                   "Aerospace Tech" },
+            { "experimentalElectrics",           "Experimental Electrics" },
+            { "experimentalMotors",              "Experimental Motors" },
+            { "experimentalScience",             "Experimental Science" },
+            { "largeUnmanned",                   "Large Probes" },
         };
 
         private ArchipelagoSession session;
         private KspApState state;
         private string statePath;
         private bool initialized = false;
-        private int techSlotsPerNode = 5;
+        private int techSlotsPerNode = 4;
         private Action onLocationReported;
 
         // ------------------------------------------------------------------
@@ -133,7 +161,7 @@ namespace KSPArchipelago
         /// Call after a successful AP connection. Loads persisted state, registers
         /// all KSP events, and immediately reports Starting Inventory locations.
         /// </summary>
-        public void Initialize(ArchipelagoSession newSession, int difficulty, int techSlots = 5, Action onLocationReported = null)
+        public void Initialize(ArchipelagoSession newSession, int difficulty, int techSlots = 4, Action onLocationReported = null)
         {
             session = newSession;
             this.onLocationReported = onLocationReported;
@@ -249,6 +277,8 @@ namespace KSPArchipelago
             // KSP misspells "Received" as "Recieved"
             GameEvents.OnScienceRecieved.Add(
                 new EventData<float, ScienceSubject, ProtoVessel, bool>.OnEvent(OnScienceReceived));
+            GameEvents.onVesselRecovered.Add(
+                new EventData<ProtoVessel, bool>.OnEvent(OnVesselRecovered));
 
             GameEvents.onGameStateLoad.Add(
                 new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
@@ -282,6 +312,8 @@ namespace KSPArchipelago
 
             GameEvents.OnScienceRecieved.Remove(
                 new EventData<float, ScienceSubject, ProtoVessel, bool>.OnEvent(OnScienceReceived));
+            GameEvents.onVesselRecovered.Remove(
+                new EventData<ProtoVessel, bool>.OnEvent(OnVesselRecovered));
 
             GameEvents.onGameStateLoad.Remove(
                 new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
@@ -351,21 +383,18 @@ namespace KSPArchipelago
         // KSC biome science detection
         // ------------------------------------------------------------------
 
-        private void OnScienceReceived(float amount, ScienceSubject subject, ProtoVessel vessel, bool reverseEngineered)
+        // Checks a ScienceSubject.id for KSC biome science and reports the
+        // matching AP location. Called from both OnScienceReceived and
+        // OnVesselRecovered so that we catch science regardless of how it
+        // reaches R&D (transmission, recovery dialog, or direct recovery).
+        private void TryMatchKscBiome(string subjectId)
         {
-            if (subject == null) return;
-            string id = subject.id;
-
-            // Format: {experiment}@{body}{situation}{biome}
-            // We want science done on Kerbin's surface at KSC biomes.
             const string kerbinLanded = "KerbinSrfLanded";
-            int idx = id.IndexOf(kerbinLanded, StringComparison.Ordinal);
+            int idx = subjectId.IndexOf(kerbinLanded, StringComparison.Ordinal);
             if (idx < 0) return;
 
-            string biome = id.Substring(idx + kerbinLanded.Length);
+            string biome = subjectId.Substring(idx + kerbinLanded.Length);
             if (string.IsNullOrEmpty(biome)) return;
-
-            Debug.Log($"[KSP-AP] KSC science: subject='{id}', biome='{biome}'");
 
             // Try exact match first, then StartsWith for sub-biomes
             string locationName = null;
@@ -386,9 +415,46 @@ namespace KSPArchipelago
                 }
             }
 
-            if (locationName == null) return;
+            if (locationName == null)
+            {
+                Debug.Log($"[KSP-AP] KSC biome '{biome}' from subject '{subjectId}' did not match any location");
+                return;
+            }
             if (!state.KscBiomesVisited.Add(locationName)) return; // already reported
+            Debug.Log($"[KSP-AP] KSC biome matched: '{biome}' → '{locationName}'");
             ReportLocation(locationName);
+        }
+
+        private void OnScienceReceived(float amount, ScienceSubject subject, ProtoVessel vessel, bool reverseEngineered)
+        {
+            if (subject == null) return;
+            Debug.Log($"[KSP-AP] OnScienceReceived: id='{subject.id}', amount={amount}");
+            TryMatchKscBiome(subject.id);
+        }
+
+        // Backup hook: scan a recovered vessel's experiment modules for KSC
+        // biome science data. OnScienceRecieved does not fire reliably on
+        // recovery in all cases, so we also extract subject IDs directly
+        // from the stored ScienceData config nodes.
+        private void OnVesselRecovered(ProtoVessel vessel, bool quick)
+        {
+            if (vessel == null) return;
+            foreach (ProtoPartSnapshot part in vessel.protoPartSnapshots)
+            {
+                foreach (ProtoPartModuleSnapshot module in part.modules)
+                {
+                    if (module.moduleName != "ModuleScienceExperiment" &&
+                        module.moduleName != "ModuleScienceContainer")
+                        continue;
+
+                    foreach (ConfigNode dataNode in module.moduleValues.GetNodes("ScienceData"))
+                    {
+                        string subjectId = dataNode.GetValue("subjectID");
+                        if (string.IsNullOrEmpty(subjectId)) continue;
+                        TryMatchKscBiome(subjectId);
+                    }
+                }
+            }
         }
 
         // ------------------------------------------------------------------

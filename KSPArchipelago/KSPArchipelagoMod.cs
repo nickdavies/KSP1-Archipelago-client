@@ -123,6 +123,7 @@ namespace KSPArchipelago
         // Slot data from AP server.
         public int Goal { get; private set; }
         public int Difficulty { get; private set; }
+        public int TechSlotsPerNode { get; private set; }
 
         // Expose connection state for the UI.
         public bool IsConnected => session != null;
@@ -193,15 +194,15 @@ namespace KSPArchipelago
                     ? Convert.ToInt32(goalObj) : 0;
                 Difficulty = loginData.SlotData.TryGetValue("difficulty", out object diffObj)
                     ? Convert.ToInt32(diffObj) : 1;
-                int techSlots = loginData.SlotData.TryGetValue("tech_slots_per_node", out object tsObj)
-                    ? Convert.ToInt32(tsObj) : 5;
+                TechSlotsPerNode = loginData.SlotData.TryGetValue("tech_slots_per_node", out object tsObj)
+                    ? Convert.ToInt32(tsObj) : 4;
                 ConnectedSlot = slotName;
                 ItemsReceivedCount = 0;
                 LocationsCheckedCount = 0;
 
                 session.Items.ItemReceived += HandleItemReceived;
 
-                missionTracker.Initialize(session, Difficulty, techSlots, () => LocationsCheckedCount++);
+                missionTracker.Initialize(session, Difficulty, TechSlotsPerNode, () => LocationsCheckedCount++);
 
                 if (gameLoaded)
                 {
