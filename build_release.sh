@@ -20,3 +20,7 @@ cp "$INPUT/websocket-sharp.dll" "$OUTPUT"
 echo "Copying Mono assemblies from $LAUNCHER_MANAGED"
 cp "$LAUNCHER_MANAGED/System.Numerics.dll" "$OUTPUT"
 cp "$LAUNCHER_MANAGED/System.Runtime.Serialization.dll" "$OUTPUT"
+
+# Assets (toolbar icon)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cp "$SCRIPT_DIR/assets/ap_icon.png" "$OUTPUT/"
