@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Threading;
 
 using UnityEngine;
+using KSP.UI.Screens;
 using Archipelago.MultiClient.Net;
 using Archipelago.MultiClient.Net.Models;
 using Archipelago.MultiClient.Net.Helpers;
@@ -11,6 +12,14 @@ using Archipelago.MultiClient.Net.Helpers;
 
 namespace KSPArchipelago
 {
+    /// Item metadata passed from network thread to main thread.
+    public struct ReceivedItem
+    {
+        public string ItemName;
+        public string SenderName;
+        public string LocationName;
+    }
+
     public static class KSPArchipelagoPartsManager
     {
         private static readonly Dictionary<string, float> SciencePackAmounts = new Dictionary<string, float>
@@ -22,23 +31,28 @@ namespace KSPArchipelago
             { "Science Pack 250", 250f },
         };
 
-        public static void GiveItem(string itemName)
+        public static void GiveItem(ReceivedItem received)
         {
+            string itemName = received.ItemName;
+            string toastText;
+
             // Science packs: add science points directly.
             if (SciencePackAmounts.TryGetValue(itemName, out float amount))
             {
                 if (ResearchAndDevelopment.Instance != null)
                     ResearchAndDevelopment.Instance.AddScience(amount, TransactionReasons.Cheating);
-                ScreenMessages.PostScreenMessage(
-                    $"AP: Received {itemName} (+{amount} science)", 4f, ScreenMessageStyle.UPPER_CENTER);
+                toastText = $"AP: Received {itemName} (+{amount} science)";
+                ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                PostToMessageSystem(received, toastText);
                 return;
             }
 
             // Other filler items: just notify.
             if (itemName == "Engineering Report" || itemName == "Cosmetic Unlock")
             {
-                ScreenMessages.PostScreenMessage(
-                    $"AP: Received {itemName}", 4f, ScreenMessageStyle.UPPER_CENTER);
+                toastText = $"AP: Received {itemName}";
+                ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                PostToMessageSystem(received, toastText);
                 return;
             }
 
@@ -48,13 +62,32 @@ namespace KSPArchipelago
             {
                 ResearchAndDevelopment.AddExperimentalPart(part);
                 Debug.Log($"[KSP-AP] Unlocked part '{itemName}' ({part.title})");
-                ScreenMessages.PostScreenMessage(
-                    $"AP: Unlocked {part.title}", 4f, ScreenMessageStyle.UPPER_CENTER);
+                toastText = $"AP: Unlocked {part.title}";
+                ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                PostToMessageSystem(received, toastText);
             }
             else
             {
                 Debug.LogWarning($"[KSP-AP] GiveItem: part not found '{itemName}'");
             }
+        }
+
+        private static void PostToMessageSystem(ReceivedItem received, string title)
+        {
+            if (MessageSystem.Instance == null) return;
+
+            string body = title;
+            if (received.SenderName != null)
+                body += $"\nFrom: {received.SenderName}";
+            if (received.LocationName != null)
+                body += $"\nLocation: {received.LocationName}";
+
+            var msg = new MessageSystem.Message(
+                title, body,
+                MessageSystemButton.MessageButtonColor.BLUE,
+                MessageSystemButton.ButtonIcons.MESSAGE
+            );
+            MessageSystem.Instance.AddMessage(msg);
         }
 
         public static void ScrubTechTree()
@@ -136,7 +169,7 @@ namespace KSPArchipelago
         public event Action<string> OnItemReceived;
 
         // Items received on the network thread, processed on the main thread.
-        private readonly ConcurrentQueue<string> pendingItems = new ConcurrentQueue<string>();
+        private readonly ConcurrentQueue<ReceivedItem> pendingItems = new ConcurrentQueue<ReceivedItem>();
 
         private void Start()
         {
@@ -160,11 +193,11 @@ namespace KSPArchipelago
         {
             // Process items queued by the network thread on the main thread,
             // where Unity API calls are safe.
-            while (pendingItems.TryDequeue(out string itemName))
+            while (pendingItems.TryDequeue(out ReceivedItem received))
             {
-                KSPArchipelagoPartsManager.GiveItem(itemName);
+                KSPArchipelagoPartsManager.GiveItem(received);
                 ItemsReceivedCount++;
-                OnItemReceived?.Invoke(itemName);
+                OnItemReceived?.Invoke(received.ItemName);
             }
 
             missionTracker?.Update();
@@ -179,7 +212,12 @@ namespace KSPArchipelago
                 Debug.LogWarning($"[KSP-AP] Received item with unknown ID: {item.ItemId}");
                 return;
             }
-            pendingItems.Enqueue(itemName);
+            pendingItems.Enqueue(new ReceivedItem
+            {
+                ItemName = itemName,
+                SenderName = item.Player?.Alias,
+                LocationName = item.LocationName,
+            });
         }
 
         public void HandleConnect(ArchipelagoSession newSession, LoginSuccessful loginData, string slotName)
