@@ -36,7 +36,6 @@ namespace KSPArchipelago
         private static readonly int[] KerbinAltThresholds = { 5000, 15000, 25000, 35000, 45000, 55000, 70000 };
 
         // Number of AP location slots per event type (must match EVENT_SCALE in locations.py).
-        // Kerbin is not in this table — it uses fixed individual location names.
         private static readonly Dictionary<string, int> EventScale = new Dictionary<string, int>
         {
             { "Flyby", 1 }, { "SOI Leave", 1 }, { "Orbit", 1 },
@@ -481,30 +480,35 @@ namespace KSPArchipelago
 
         private void OnFlyBy(Vessel vessel, CelestialBody body)
         {
-            if (body.name == "Kerbin") return;
             ReportBodyEvent(body.name, "Flyby");
         }
 
         private void OnOrbit(Vessel vessel, CelestialBody body)
         {
-            if (body.name == "Kerbin")
-            {
-                ReportLocation("Kerbin Orbit");
-                return;
-            }
             ReportBodyEvent(body.name, "Orbit");
         }
 
         private void OnEscape(Vessel vessel, CelestialBody body)
         {
-            // Leaving Kerbin SOI is not a location; leaving any other body's SOI is.
-            if (body.name == "Kerbin") return;
+            // Entering a moon's SOI (e.g. Duna→Ike) fires onEscape for the parent.
+            // Only report SOI Leave for a true system escape, not moon encounters.
+            CelestialBody newBody = vessel.mainBody;
+            if (newBody != null && newBody.referenceBody == body)
+                return;
+
             ReportBodyEvent(body.name, "SOI Leave");
         }
 
         private void OnLand(Vessel vessel, CelestialBody body)
         {
-            if (body.name == "Kerbin") return; // No "Kerbin Landing" location
+            if (body.name == "Kerbin")
+            {
+                // Any Kerbin landing = vessel recovery
+                ReportBodyEvent("Kerbin", "Return");
+                if (vessel.GetCrewCount() > 0)
+                    ReportBodyEvent("Kerbin", "Sample Return");
+                return;
+            }
             ReportBodyEvent(body.name, "Landing");
             if (vessel.GetCrewCount() > 0)
                 ReportBodyEvent(body.name, "Crewed Landing");
@@ -545,14 +549,19 @@ namespace KSPArchipelago
         private void OnFlagPlant(Vessel flagVessel)
         {
             string body = flagVessel.mainBody?.name;
-            if (body == null || body == "Kerbin") return;
+            if (body == null) return;
             ReportBodyEvent(body, "Flag Plant");
         }
 
         // onReturnFromOrbit fires when a vessel lands on Kerbin after having orbited another body.
+        // The body parameter is the remote body (e.g. Mun), not Kerbin.
         private void OnReturnFromOrbit(Vessel vessel, CelestialBody body)
         {
             ReportBodyEvent(body.name, "Return");
+            // Also count as a Kerbin landing (deorbit + recovery)
+            ReportBodyEvent("Kerbin", "Landing");
+            if (vessel.GetCrewCount() > 0)
+                ReportBodyEvent("Kerbin", "Crewed Landing");
         }
 
         // onReturnFromSurface fires when a vessel lands on Kerbin after having landed on another body.
@@ -560,6 +569,10 @@ namespace KSPArchipelago
         {
             ReportBodyEvent(body.name, "Return");
             ReportBodyEvent(body.name, "Sample Return");
+            // Also count as a Kerbin landing (deorbit + recovery)
+            ReportBodyEvent("Kerbin", "Landing");
+            if (vessel.GetCrewCount() > 0)
+                ReportBodyEvent("Kerbin", "Crewed Landing");
         }
 
         private void OnStageSeparation(EventReport report)
