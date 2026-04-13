@@ -604,6 +604,7 @@ namespace KSPArchipelago
             for (int slot = 1; slot <= techSlotsPerNode; slot++)
                 ReportLocation($"{displayName} {slot}");
 
+            // Clear placeholders before scouting re-evaluates newly purchasable nodes.
             UnityEngine.Object.FindObjectOfType<TechTreeScout>()?.OnNodeChecked(nodeId);
         }
     }

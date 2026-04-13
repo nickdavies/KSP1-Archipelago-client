@@ -254,6 +254,7 @@ namespace KSPArchipelago
             lock (sessionLock)
             {
                 missionTracker?.Shutdown();
+                FindObjectOfType<TechTreeScout>()?.OnDisconnect();
                 session = null;
                 ConnectedSlot = null;
             }

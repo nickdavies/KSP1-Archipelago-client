@@ -21,6 +21,10 @@ echo "Copying Mono assemblies from $LAUNCHER_MANAGED"
 cp "$LAUNCHER_MANAGED/System.Numerics.dll" "$OUTPUT"
 cp "$LAUNCHER_MANAGED/System.Runtime.Serialization.dll" "$OUTPUT"
 
-# Assets (toolbar icon)
+# Assets
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cp "$SCRIPT_DIR/assets/ap_icon.png" "$OUTPUT/"
+cp "$SCRIPT_DIR/assets/ap_placeholders.cfg" "$OUTPUT/"
+mkdir -p "$OUTPUT/Models"
+cp "$SCRIPT_DIR/assets/Models/GooExperiment.mu" "$OUTPUT/Models/"
+cp "$SCRIPT_DIR/assets/Models/GooExperiment.dds" "$OUTPUT/Models/"
