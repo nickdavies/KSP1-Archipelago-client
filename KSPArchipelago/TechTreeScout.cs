@@ -113,7 +113,11 @@ namespace KSPArchipelago
 
         private void PopulateAndScout()
         {
-            List<string> purchasableIds = FindPurchasableNodeIds();
+            List<string> purchasableIds = FindPurchasableNodeIds(out var bandLocked);
+
+            // Show locked indicators on nodes where parents are OK but R&D band is too low.
+            placeholderManager.PopulateBandLockedNodes(bandLocked);
+
             if (purchasableIds.Count == 0) return;
 
             // Populate placeholders for all purchasable nodes.
@@ -281,7 +285,13 @@ namespace KSPArchipelago
 
         private List<string> FindPurchasableNodeIds()
         {
+            return FindPurchasableNodeIds(out _);
+        }
+
+        private List<string> FindPurchasableNodeIds(out List<(string nodeId, int band)> bandLocked)
+        {
             var result = new List<string>();
+            bandLocked = new List<(string, int)>();
             try
             {
                 foreach (RDNode node in RDController.Instance.nodes)
@@ -289,8 +299,15 @@ namespace KSPArchipelago
                     if (node?.tech == null) continue;
                     if (node.IsResearched) continue;
 
-                    if (IsNodePurchasable(node))
+                    if (IsNodePurchasable(node, out int requiredBand))
+                    {
                         result.Add(node.tech.techID);
+                    }
+                    else if (requiredBand > 0)
+                    {
+                        // Parents OK but R&D band too low — show locked indicator.
+                        bandLocked.Add((node.tech.techID, requiredBand));
+                    }
                 }
             }
             catch (Exception ex)
@@ -301,13 +318,25 @@ namespace KSPArchipelago
         }
 
         /// <summary>
-        /// Checks whether a node's prerequisite parents are satisfied.
+        /// Checks whether a node's prerequisite parents are satisfied and the
+        /// player's R&D level permits access to this node's band.
         /// Respects AnyParentToUnlock: when true, only one parent must be researched.
+        /// Returns the required band via out parameter (for locked-node indicators).
         /// </summary>
-        private static bool IsNodePurchasable(RDNode node)
+        private bool IsNodePurchasable(RDNode node)
         {
+            return IsNodePurchasable(node, out _);
+        }
+
+        private bool IsNodePurchasable(RDNode node, out int requiredBand)
+        {
+            requiredBand = -1;
+
             if (node.parents == null || node.parents.Length == 0)
-                return true;
+            {
+                // Check R&D band even for root-adjacent nodes.
+                return CheckRDBand(node, out requiredBand);
+            }
 
             bool anyResearched = false;
             bool anyUnresearched = false;
@@ -321,10 +350,26 @@ namespace KSPArchipelago
                     anyUnresearched = true;
             }
 
-            if (node.AnyParentToUnlock)
-                return anyResearched || !anyUnresearched;
-            else
-                return !anyUnresearched;
+            bool parentsOk = node.AnyParentToUnlock
+                ? (anyResearched || !anyUnresearched)
+                : !anyUnresearched;
+
+            if (!parentsOk) return false;
+
+            return CheckRDBand(node, out requiredBand);
+        }
+
+        private bool CheckRDBand(RDNode node, out int requiredBand)
+        {
+            requiredBand = -1;
+            if (mod?.NodeBands != null
+                && mod.NodeBands.TryGetValue(node.tech.techID, out int band))
+            {
+                requiredBand = band;
+                if (mod.RDLevel < band)
+                    return false;
+            }
+            return true;
         }
 
         /// <summary>

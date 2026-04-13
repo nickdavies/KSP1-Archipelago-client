@@ -138,6 +138,48 @@ namespace KSPArchipelago
         }
 
         /// <summary>
+        /// Add a single "Locked" placeholder to nodes where parents are satisfied but
+        /// the player's R&D level is too low. Tells the player why the node is empty.
+        /// </summary>
+        public void PopulateBandLockedNodes(List<(string nodeId, int band)> lockedNodes)
+        {
+            if (!initialized || pool.Count == 0) return;
+            if (RDController.Instance == null) return;
+
+            foreach (var (nodeId, band) in lockedNodes)
+            {
+                // Skip if already populated (purchasable or previously locked).
+                if (nodeEntries.ContainsKey(nodeId)) continue;
+
+                RDNode rdNode = FindRDNode(nodeId);
+                if (rdNode?.tech == null) continue;
+
+                int placeholderIdx = -1;
+                for (int i = 0; i < pool.Count; i++)
+                {
+                    if (!inUseBy.ContainsKey(i))
+                    {
+                        placeholderIdx = i;
+                        break;
+                    }
+                }
+                if (placeholderIdx < 0) break;
+
+                AvailablePart placeholder = pool[placeholderIdx];
+                placeholder.title = $"Locked \u2014 Requires R&D Level {band}";
+                placeholder.description = "Find Progressive R&D items in the multiworld to unlock higher tech tiers.";
+
+                rdNode.tech.partsAssigned.Add(placeholder);
+                inUseBy[placeholderIdx] = nodeId;
+
+                nodeEntries[nodeId] = new List<SlotEntry>
+                {
+                    new SlotEntry { Slot = 0, Part = placeholder, PlaceholderIndex = placeholderIdx }
+                };
+            }
+        }
+
+        /// <summary>
         /// Update populated nodes with scout data. For same-player KSP parts, swap the
         /// placeholder with the real AvailablePart. For everything else, update the
         /// placeholder's title and description. Call on main thread when scout completes.

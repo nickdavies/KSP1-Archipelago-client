@@ -145,6 +145,8 @@ namespace KSPArchipelago
             { "largeUnmanned",                   "Large Probes" },
         };
 
+        private const float MissionScienceBonus = 5f;
+
         private ArchipelagoSession session;
         private KspApState state;
         private string statePath;
@@ -323,7 +325,8 @@ namespace KSPArchipelago
         // ------------------------------------------------------------------
 
         /// Reports a location by name to the AP server, idempotent.
-        private void ReportLocation(string name)
+        /// When grantScience is true, awards a small science bonus on first report.
+        private void ReportLocation(string name, bool grantScience = false)
         {
             if (session == null) return;
             try
@@ -338,6 +341,8 @@ namespace KSPArchipelago
                     return; // already reported
                 session.Locations.CompleteLocationChecks(id);
                 onLocationReported?.Invoke();
+                if (grantScience && ResearchAndDevelopment.Instance != null)
+                    ResearchAndDevelopment.Instance.AddScience(MissionScienceBonus, TransactionReasons.ScienceTransmission);
                 Debug.Log($"[KSP-AP] Checked: {name}");
                 SaveState();
             }
@@ -361,7 +366,7 @@ namespace KSPArchipelago
                 return; // all slots already reported
             count++;
             state.BodyEventCounts[key] = count;
-            ReportLocation($"{bodyName} {eventName} {count}");
+            ReportLocation($"{bodyName} {eventName} {count}", grantScience: true);
         }
 
         // ------------------------------------------------------------------
@@ -421,7 +426,7 @@ namespace KSPArchipelago
             }
             if (!state.KscBiomesVisited.Add(locationName)) return; // already reported
             Debug.Log($"[KSP-AP] KSC biome matched: '{biome}' → '{locationName}'");
-            ReportLocation(locationName);
+            ReportLocation(locationName, grantScience: true);
         }
 
         private void OnScienceReceived(float amount, ScienceSubject subject, ProtoVessel vessel, bool reverseEngineered)
@@ -470,7 +475,7 @@ namespace KSPArchipelago
             foreach (int threshold in KerbinAltThresholds)
             {
                 if (alt >= threshold && state.AltitudesReachedMeters.Add(threshold))
-                    ReportLocation($"Kerbin {threshold / 1000}km Altitude");
+                    ReportLocation($"Kerbin {threshold / 1000}km Altitude", grantScience: true);
             }
         }
 
@@ -522,7 +527,7 @@ namespace KSPArchipelago
 
             // Kerbin Splashdown — skip EVA vessels (onLand does not fire for SPLASHED)
             if (data.to == Vessel.Situations.SPLASHED && body == "Kerbin" && !v.isEVA)
-                ReportLocation("Kerbin Splashdown");
+                ReportLocation("Kerbin Splashdown", grantScience: true);
 
             // First Launch: PRELAUNCH → FLYING or SUB_ORBITAL on Kerbin
             if (body == "Kerbin"
@@ -531,7 +536,7 @@ namespace KSPArchipelago
                 && !state.KerbinFirstLaunchDone)
             {
                 state.KerbinFirstLaunchDone = true;
-                ReportLocation("Kerbin First Launch");
+                ReportLocation("Kerbin First Launch", grantScience: true);
             }
 
             // First Landing: transition to LANDED on Kerbin from FLYING or SUB_ORBITAL
@@ -542,7 +547,7 @@ namespace KSPArchipelago
                 && !state.KerbinFirstLandingDone)
             {
                 state.KerbinFirstLandingDone = true;
-                ReportLocation("Kerbin First Landing");
+                ReportLocation("Kerbin First Landing", grantScience: true);
             }
         }
 
@@ -581,7 +586,7 @@ namespace KSPArchipelago
             Vessel v = FlightGlobals.ActiveVessel;
             if (v == null || v.mainBody?.name != "Kerbin") return;
             state.KerbinStagingDone = true;
-            ReportLocation("Kerbin First Staging");
+            ReportLocation("Kerbin First Staging", grantScience: true);
         }
 
         private void OnCrewOnEva(GameEvents.FromToAction<Part, Part> action)
@@ -589,7 +594,7 @@ namespace KSPArchipelago
             Vessel v = action.to?.vessel;
             if (v == null) return;
             if (v.mainBody?.name == "Kerbin" && v.situation == Vessel.Situations.ORBITING)
-                ReportLocation("Kerbin EVA in Orbit");
+                ReportLocation("Kerbin EVA in Orbit", grantScience: true);
         }
 
         private void OnTechResearched(GameEvents.HostTargetAction<RDTech, RDTech.OperationResult> action)

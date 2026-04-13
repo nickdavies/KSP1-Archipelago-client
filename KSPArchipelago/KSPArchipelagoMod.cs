@@ -56,6 +56,17 @@ namespace KSPArchipelago
                 return;
             }
 
+            // Progressive R&D: upgrade the tech tree band limit.
+            if (itemName == "Progressive R&D")
+            {
+                var mod = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
+                if (mod != null) mod.IncrementRDLevel();
+                toastText = $"AP: R&D Facility Upgraded to Level {mod?.RDLevel ?? 0}!";
+                ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                PostToMessageSystem(received, toastText);
+                return;
+            }
+
             // Assume everything else is a part name.
             AvailablePart part = PartLoader.getPartInfoByName(itemName);
             if (part != null)
@@ -158,12 +169,23 @@ namespace KSPArchipelago
         public int Difficulty { get; private set; }
         public int TechSlotsPerNode { get; private set; }
 
+        // Progressive R&D: current band level (0 = base, up to 3).
+        public int RDLevel { get; private set; }
+        // Tech node ID → required R&D band (from slot data).
+        public Dictionary<string, int> NodeBands { get; private set; }
+
         // Expose connection state for the UI.
         public bool IsConnected => session != null;
         internal ArchipelagoSession Session => session;
         public int ItemsReceivedCount { get; private set; }
         public int LocationsCheckedCount { get; private set; }
         public string ConnectedSlot { get; private set; }
+
+        public void IncrementRDLevel()
+        {
+            RDLevel++;
+            Debug.Log($"[KSP-AP] R&D level incremented to {RDLevel}");
+        }
 
         // Internal notification callback for UI.
         public event Action<string> OnItemReceived;
@@ -237,6 +259,24 @@ namespace KSPArchipelago
                 ConnectedSlot = slotName;
                 ItemsReceivedCount = 0;
                 LocationsCheckedCount = 0;
+
+                // Parse node_bands from slot data.
+                NodeBands = new Dictionary<string, int>();
+                if (loginData.SlotData.TryGetValue("node_bands", out object bandsObj)
+                    && bandsObj is Newtonsoft.Json.Linq.JObject bandsDict)
+                {
+                    foreach (var kvp in bandsDict)
+                        NodeBands[kvp.Key] = kvp.Value.Value<int>();
+                }
+
+                // Restore R&D level from already-received items on reconnect.
+                RDLevel = 0;
+                foreach (var item in newSession.Items.AllItemsReceived)
+                {
+                    if (item.ItemName == "Progressive R&D")
+                        RDLevel++;
+                }
+                Debug.Log($"[KSP-AP] Restored R&D level to {RDLevel} from {newSession.Items.AllItemsReceived.Count} received items");
 
                 session.Items.ItemReceived += HandleItemReceived;
 
