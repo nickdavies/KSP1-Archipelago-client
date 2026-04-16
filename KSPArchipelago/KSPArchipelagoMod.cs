@@ -24,6 +24,8 @@ namespace KSPArchipelago
     {
         private static readonly Dictionary<string, float> SciencePackAmounts = new Dictionary<string, float>
         {
+            { "Science Pack 1",   1f },
+            { "Science Pack 5",   5f },
             { "Science Pack 10",  10f },
             { "Science Pack 25",  25f },
             { "Science Pack 50",  50f },
@@ -42,15 +44,6 @@ namespace KSPArchipelago
                 if (ResearchAndDevelopment.Instance != null)
                     ResearchAndDevelopment.Instance.AddScience(amount, TransactionReasons.Cheating);
                 toastText = $"AP: Received {itemName} (+{amount} science)";
-                ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
-                PostToMessageSystem(received, toastText);
-                return;
-            }
-
-            // Other filler items: just notify.
-            if (itemName == "Engineering Report" || itemName == "Cosmetic Unlock")
-            {
-                toastText = $"AP: Received {itemName}";
                 ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
                 PostToMessageSystem(received, toastText);
                 return;
