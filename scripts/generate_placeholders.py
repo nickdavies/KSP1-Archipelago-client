@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Generate ap_placeholders.cfg with placeholder PART blocks for AP tech tree integration.
 
-Each placeholder uses the mystery goo model and is hidden from the normal tech tree
+Each placeholder uses the AP model and is hidden from the normal tech tree
 (TechRequired = inaccessable). PlaceholderManager.cs swaps these into tech nodes at
 runtime to show scouted AP items.
 """
 
 import os
+import sys
 
 NUM_PLACEHOLDERS = 80
-OUTPUT = os.path.join(os.path.dirname(__file__), "..", "assets", "ap_placeholders.cfg")
+OUTPUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "assets", "ap_placeholders.cfg")
 
 TEMPLATE = """\
 PART
@@ -20,7 +21,7 @@ PART
 
     MODEL
     {{
-        model = KSPArchipelago/Models/GooExperiment
+        model = KSPArchipelago/Models/AP
     }}
 
     rescaleFactor = 1

@@ -1,3 +1,4 @@
 *.ddl
 KSPArchipelago/bin
 KSPArchipelago/obj
+out/
