@@ -154,6 +154,11 @@ namespace KSPArchipelago
         private int techSlotsPerNode = 4;
         private Action onLocationReported;
 
+        // Runtime-only: vessel persistentIds that have achieved Kerbin orbit.
+        // Used to gate "Kerbin Return" — only vessels that orbited Kerbin qualify.
+        // Not persisted; onOrbit re-fires on scene load for orbiting vessels.
+        private readonly HashSet<uint> _vesselsOrbitedKerbin = new HashSet<uint>();
+
         // ------------------------------------------------------------------
         // Lifecycle
         // ------------------------------------------------------------------
@@ -443,6 +448,12 @@ namespace KSPArchipelago
         private void OnVesselRecovered(ProtoVessel vessel, bool quick)
         {
             if (vessel == null) return;
+
+            // Kerbin Sample Return: recovering any crewed vessel on Kerbin
+            // (includes EVA kerbals, which don't trigger OnLand).
+            if (vessel.GetVesselCrew().Count > 0)
+                ReportBodyEvent("Kerbin", "Sample Return");
+
             foreach (ProtoPartSnapshot part in vessel.protoPartSnapshots)
             {
                 foreach (ProtoPartModuleSnapshot module in part.modules)
@@ -491,6 +502,8 @@ namespace KSPArchipelago
         private void OnOrbit(Vessel vessel, CelestialBody body)
         {
             ReportBodyEvent(body.name, "Orbit");
+            if (body.name == "Kerbin")
+                _vesselsOrbitedKerbin.Add(vessel.persistentId);
         }
 
         private void OnEscape(Vessel vessel, CelestialBody body)
@@ -508,10 +521,20 @@ namespace KSPArchipelago
         {
             if (body.name == "Kerbin")
             {
-                // Any Kerbin landing = vessel recovery
-                ReportBodyEvent("Kerbin", "Return");
-                if (vessel.GetCrewCount() > 0)
-                    ReportBodyEvent("Kerbin", "Sample Return");
+                // Skip non-craft vessels (flags, debris, EVA kerbals)
+                if (vessel.vesselType == VesselType.Flag ||
+                    vessel.vesselType == VesselType.Debris ||
+                    vessel.isEVA)
+                    return;
+
+                // Kerbin Return requires the vessel to have achieved Kerbin orbit.
+                // Sub-orbital hops don't qualify.
+                if (_vesselsOrbitedKerbin.Contains(vessel.persistentId))
+                {
+                    ReportBodyEvent("Kerbin", "Return");
+                    if (vessel.GetCrewCount() > 0)
+                        ReportBodyEvent("Kerbin", "Sample Return");
+                }
                 return;
             }
             ReportBodyEvent(body.name, "Landing");
