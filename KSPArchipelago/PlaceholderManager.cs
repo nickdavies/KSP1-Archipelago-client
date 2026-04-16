@@ -13,9 +13,10 @@ namespace KSPArchipelago
     internal class PlaceholderManager
     {
         private const string PlaceholderPrefix = "ap.placeholder.";
-        private const int MaxPlaceholders = 32;
 
         // Cached placeholder AvailableParts from PartLoader, indexed 0..N-1.
+        // Pool size is determined by how many ap_placeholder_NNN parts exist
+        // in the cfg — no hardcoded cap in code.
         private readonly List<AvailablePart> pool = new List<AvailablePart>();
 
         // Which placeholders are currently in use: placeholder index → (nodeId, slot).
@@ -44,12 +45,12 @@ namespace KSPArchipelago
             if (initialized) return;
 
             pool.Clear();
-            for (int i = 1; i <= MaxPlaceholders; i++)
+            for (int i = 1; ; i++)
             {
                 string name = $"{PlaceholderPrefix}{i:D3}";
                 AvailablePart ap = PartLoader.getPartInfoByName(name);
-                if (ap != null)
-                    pool.Add(ap);
+                if (ap == null) break;
+                pool.Add(ap);
             }
 
             initialized = true;
@@ -238,8 +239,8 @@ namespace KSPArchipelago
                 }
             }
 
-            // Refresh the R&D UI if a node is selected so the parts list redraws.
-            RefreshSelectedNode();
+            // Refresh all populated nodes so part count tooltips and part lists update.
+            RefreshAllPopulatedNodes();
 
             Debug.Log($"[KSP-AP] PlaceholderManager: updated {updated} slots with scout data");
         }
@@ -315,6 +316,10 @@ namespace KSPArchipelago
                 {
                     if (!rdNode.tech.partsAssigned.Contains(entry.Part))
                         rdNode.tech.partsAssigned.Add(entry.Part);
+
+                    // Re-track placeholder usage so new nodes don't double-assign.
+                    if (entry.PlaceholderIndex >= 0)
+                        inUseBy[entry.PlaceholderIndex] = kvp.Key;
                 }
             }
 
@@ -373,15 +378,19 @@ namespace KSPArchipelago
         }
 
         /// <summary>
-        /// Force the R&D UI to refresh the currently selected node's part list.
+        /// Refresh graphics on all nodes we've populated, updating part count
+        /// tooltips and the selected node's parts list.
         /// </summary>
-        private static void RefreshSelectedNode()
+        public void RefreshAllPopulatedNodes()
         {
+            if (RDController.Instance == null) return;
             try
             {
-                RDNode selected = RDController.Instance?.node_selected;
-                if (selected != null)
-                    selected.UpdateGraphics();
+                foreach (string nodeId in nodeEntries.Keys)
+                {
+                    RDNode rdNode = FindRDNode(nodeId);
+                    rdNode?.UpdateGraphics();
+                }
             }
             catch { /* R&D may be closing */ }
         }

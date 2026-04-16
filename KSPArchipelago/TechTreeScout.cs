@@ -95,7 +95,7 @@ namespace KSPArchipelago
             if (needsRescount && IsTechTreeReady())
             {
                 needsRescount = false;
-                ScoutNewPurchasableNodes();
+                PopulateAndScout();
             }
 
             // Apply scout results that arrived from the callback thread.
@@ -103,22 +103,18 @@ namespace KSPArchipelago
             {
                 pendingScoutUpdate = false;
                 placeholderManager.UpdateWithScoutData(scoutedByNode);
+
+                // Scout data may have freed pool slots by swapping placeholders
+                // for real parts. Retry populating any nodes that were missed
+                // due to pool exhaustion on the initial pass.
+                RetryMissedNodes();
             }
         }
 
         private void OnRDOpen()
         {
             placeholderManager.Initialize();
-
-            if (IsTechTreeReady())
-            {
-                PopulateAndScout();
-            }
-            else
-            {
-                // Tree not ready yet; wait for next Update.
-                needsRescount = true;
-            }
+            needsRescount = true;
         }
 
         private void OnRDClose()
@@ -133,7 +129,16 @@ namespace KSPArchipelago
             // Show locked indicators on nodes where parents are OK but R&D band is too low.
             placeholderManager.PopulateBandLockedNodes(bandLocked);
 
-            if (purchasableIds.Count == 0) return;
+            // Restore any cached entries from a previous R&D session (KSP rebuilds
+            // partsAssigned from scratch on each R&D open, so our insertions are gone).
+            // Must happen before early-return so band-locked entries are also restored.
+            placeholderManager.RestoreToUI();
+
+            if (purchasableIds.Count == 0)
+            {
+                placeholderManager.RefreshAllPopulatedNodes();
+                return;
+            }
 
             // Populate placeholders for all purchasable nodes.
             var session = mod.Session;
@@ -141,12 +146,11 @@ namespace KSPArchipelago
             var missing = new HashSet<long>(session.Locations.AllMissingLocations);
             placeholderManager.PopulateNodes(purchasableIds, missing, mod.TechSlotsPerNode, session);
 
-            // If we have cached scout data, apply it immediately.
+            // Apply cached scout data (names, flags, real-part swaps) immediately.
             if (scoutedByNode.Count > 0)
-            {
-                placeholderManager.RestoreToUI();
                 placeholderManager.UpdateWithScoutData(scoutedByNode);
-            }
+            else
+                placeholderManager.RefreshAllPopulatedNodes();
 
             // Scout only nodes we haven't scouted yet.
             ScoutNewPurchasableNodes();
@@ -217,13 +221,12 @@ namespace KSPArchipelago
                     }
                 }
 
-                if (locationIds.Count == 0)
-                {
-                    // Mark as scouted even if all locations already checked.
-                    foreach (string id in newNodeIds)
-                        scoutedNodeIds.Add(id);
-                    return;
-                }
+                // Mark nodes as scouted immediately to prevent duplicate requests
+                // if PopulateAndScout re-runs before the async callback fires.
+                foreach (string id in newNodeIds)
+                    scoutedNodeIds.Add(id);
+
+                if (locationIds.Count == 0) return;
 
                 Debug.Log($"[KSP-AP] Scouting {locationIds.Count} locations across {newNodeIds.Count} new purchasable nodes");
 
@@ -283,10 +286,6 @@ namespace KSPArchipelago
                 foreach (var list in merged.Values)
                     list.Sort((a, b) => a.Slot.CompareTo(b.Slot));
 
-                // Mark these nodes as scouted.
-                foreach (string id in scoutedIds)
-                    scoutedNodeIds.Add(id);
-
                 // Atomic swap — main thread sees either old or new, never partial.
                 scoutedByNode = merged;
                 pendingScoutUpdate = true;
@@ -309,21 +308,40 @@ namespace KSPArchipelago
             bandLocked = new List<LockedNodeInfo>();
             try
             {
+                // Pass 1: collect researched tech IDs from the canonical node list.
+                var researchedIds = new HashSet<string>();
                 foreach (RDNode node in RDController.Instance.nodes)
                 {
-                    if (node?.tech == null) continue;
-                    if (node.IsResearched) continue;
+                    if (node?.tech != null && node.IsResearched)
+                        researchedIds.Add(node.tech.techID);
+                }
 
-                    if (IsNodePurchasable(node, out int requiredBand))
+                // Pass 2: classify non-researched nodes.
+                int totalNodes = 0, purchasable = 0, locked = 0, blocked = 0;
+                foreach (RDNode node in RDController.Instance.nodes)
+                {
+                    totalNodes++;
+                    if (node?.tech == null) continue;
+                    if (researchedIds.Contains(node.tech.techID)) continue;
+
+                    if (IsNodePurchasable(node, researchedIds, out int requiredBand))
                     {
                         result.Add(node.tech.techID);
+                        purchasable++;
                     }
                     else if (requiredBand > 0)
                     {
-                        // Parents OK but R&D band too low — show locked indicator.
                         bandLocked.Add(new LockedNodeInfo(node.tech.techID, requiredBand));
+                        locked++;
+                    }
+                    else
+                    {
+                        blocked++;
                     }
                 }
+                Debug.Log($"[KSP-AP] FindPurchasableNodeIds: {totalNodes} total, "
+                    + $"{researchedIds.Count} researched, {purchasable} purchasable, "
+                    + $"{locked} bandLocked, {blocked} parentBlocked");
             }
             catch (Exception ex)
             {
@@ -336,30 +354,24 @@ namespace KSPArchipelago
         /// Checks whether a node's prerequisite parents are satisfied and the
         /// player's R&D level permits access to this node's band.
         /// Respects AnyParentToUnlock: when true, only one parent must be researched.
-        /// Returns the required band via out parameter (for locked-node indicators).
+        /// Uses the pre-built researchedIds set (from the canonical node list) rather
+        /// than parent node references, which may be uninitialized on first R&D open.
         /// </summary>
-        private bool IsNodePurchasable(RDNode node)
-        {
-            return IsNodePurchasable(node, out _);
-        }
-
-        private bool IsNodePurchasable(RDNode node, out int requiredBand)
+        private bool IsNodePurchasable(RDNode node, HashSet<string> researchedIds, out int requiredBand)
         {
             requiredBand = -1;
 
             if (node.parents == null || node.parents.Length == 0)
-            {
-                // Check R&D band even for root-adjacent nodes.
                 return CheckRDBand(node, out requiredBand);
-            }
 
             bool anyResearched = false;
             bool anyUnresearched = false;
 
             foreach (RDNode.Parent p in node.parents)
             {
-                if (p?.parent?.node == null) continue;
-                if (p.parent.node.IsResearched)
+                if (p.parent?.node?.tech == null) continue;
+
+                if (researchedIds.Contains(p.parent.node.tech.techID))
                     anyResearched = true;
                 else
                     anyUnresearched = true;
@@ -385,6 +397,24 @@ namespace KSPArchipelago
                     return false;
             }
             return true;
+        }
+
+        /// <summary>
+        /// After scout data frees pool slots (real-part swaps), populate any
+        /// purchasable nodes that were missed due to pool exhaustion.
+        /// </summary>
+        private void RetryMissedNodes()
+        {
+            var session = mod.Session;
+            if (session == null) return;
+
+            List<string> purchasableIds = FindPurchasableNodeIds();
+            var missing = new HashSet<long>(session.Locations.AllMissingLocations);
+
+            placeholderManager.PopulateNodes(purchasableIds, missing, mod.TechSlotsPerNode, session);
+
+            if (scoutedByNode.Count > 0)
+                placeholderManager.UpdateWithScoutData(scoutedByNode);
         }
 
         /// <summary>

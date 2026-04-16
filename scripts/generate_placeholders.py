@@ -8,7 +8,7 @@ runtime to show scouted AP items.
 
 import os
 
-NUM_PLACEHOLDERS = 32
+NUM_PLACEHOLDERS = 80
 OUTPUT = os.path.join(os.path.dirname(__file__), "..", "assets", "ap_placeholders.cfg")
 
 TEMPLATE = """\
