@@ -19,6 +19,7 @@ namespace KSPArchipelago
 
         // Panel state.
         private bool showPanel = false;
+        private bool wasConnected = false;
         private Rect windowRect = new Rect(Screen.width / 2 - 200, Screen.height / 2 - 150, 400, 300);
 
         // Connection form fields.
@@ -50,6 +51,16 @@ namespace KSPArchipelago
         private void Update()
         {
             if (mod == null) return;
+
+            // Auto-close the panel on successful connection (false → true transition).
+            if (mod.IsConnected && !wasConnected)
+            {
+                showPanel = false;
+                if (toolbarButton != null)
+                    toolbarButton.SetFalse(false);
+            }
+            wasConnected = mod.IsConnected;
+
             bool shouldLock = !mod.IsConnected
                 && HighLogic.LoadedScene == GameScenes.SPACECENTER;
             if (shouldLock)
