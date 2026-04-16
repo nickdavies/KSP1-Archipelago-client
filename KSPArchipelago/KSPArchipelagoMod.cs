@@ -266,7 +266,7 @@ namespace KSPArchipelago
                     && bandsObj is Newtonsoft.Json.Linq.JObject bandsDict)
                 {
                     foreach (var kvp in bandsDict)
-                        NodeBands[kvp.Key] = kvp.Value.Value<int>();
+                        NodeBands[kvp.Key] = (int)kvp.Value;
                 }
 
                 // Restore R&D level from already-received items on reconnect.

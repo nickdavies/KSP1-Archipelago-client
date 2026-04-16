@@ -11,6 +11,21 @@ using Archipelago.MultiClient.Net.Models;
 namespace KSPArchipelago
 {
     /// <summary>
+    /// A tech node that is parent-ready but locked behind a higher R&amp;D band.
+    /// </summary>
+    public struct LockedNodeInfo
+    {
+        public string NodeId;
+        public int Band;
+
+        public LockedNodeInfo(string nodeId, int band)
+        {
+            NodeId = nodeId;
+            Band = band;
+        }
+    }
+
+    /// <summary>
     /// Scouted item data for a single AP location slot in a tech node.
     /// Shared between TechTreeScout (produces) and PlaceholderManager (consumes).
     /// </summary>
@@ -288,10 +303,10 @@ namespace KSPArchipelago
             return FindPurchasableNodeIds(out _);
         }
 
-        private List<string> FindPurchasableNodeIds(out List<(string nodeId, int band)> bandLocked)
+        private List<string> FindPurchasableNodeIds(out List<LockedNodeInfo> bandLocked)
         {
             var result = new List<string>();
-            bandLocked = new List<(string, int)>();
+            bandLocked = new List<LockedNodeInfo>();
             try
             {
                 foreach (RDNode node in RDController.Instance.nodes)
@@ -306,7 +321,7 @@ namespace KSPArchipelago
                     else if (requiredBand > 0)
                     {
                         // Parents OK but R&D band too low — show locked indicator.
-                        bandLocked.Add((node.tech.techID, requiredBand));
+                        bandLocked.Add(new LockedNodeInfo(node.tech.techID, requiredBand));
                     }
                 }
             }

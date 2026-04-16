@@ -141,17 +141,17 @@ namespace KSPArchipelago
         /// Add a single "Locked" placeholder to nodes where parents are satisfied but
         /// the player's R&D level is too low. Tells the player why the node is empty.
         /// </summary>
-        public void PopulateBandLockedNodes(List<(string nodeId, int band)> lockedNodes)
+        public void PopulateBandLockedNodes(List<LockedNodeInfo> lockedNodes)
         {
             if (!initialized || pool.Count == 0) return;
             if (RDController.Instance == null) return;
 
-            foreach (var (nodeId, band) in lockedNodes)
+            foreach (var info in lockedNodes)
             {
                 // Skip if already populated (purchasable or previously locked).
-                if (nodeEntries.ContainsKey(nodeId)) continue;
+                if (nodeEntries.ContainsKey(info.NodeId)) continue;
 
-                RDNode rdNode = FindRDNode(nodeId);
+                RDNode rdNode = FindRDNode(info.NodeId);
                 if (rdNode?.tech == null) continue;
 
                 int placeholderIdx = -1;
@@ -166,13 +166,13 @@ namespace KSPArchipelago
                 if (placeholderIdx < 0) break;
 
                 AvailablePart placeholder = pool[placeholderIdx];
-                placeholder.title = $"Locked \u2014 Requires R&D Level {band}";
+                placeholder.title = $"Locked \u2014 Requires R&D Level {info.Band}";
                 placeholder.description = "Find Progressive R&D items in the multiworld to unlock higher tech tiers.";
 
                 rdNode.tech.partsAssigned.Add(placeholder);
-                inUseBy[placeholderIdx] = nodeId;
+                inUseBy[placeholderIdx] = info.NodeId;
 
-                nodeEntries[nodeId] = new List<SlotEntry>
+                nodeEntries[info.NodeId] = new List<SlotEntry>
                 {
                     new SlotEntry { Slot = 0, Part = placeholder, PlaceholderIndex = placeholderIdx }
                 };
