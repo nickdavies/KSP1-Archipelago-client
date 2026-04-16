@@ -12,7 +12,7 @@ namespace KSPArchipelago
     /// </summary>
     internal class PlaceholderManager
     {
-        private const string PlaceholderPrefix = "ap_placeholder_";
+        private const string PlaceholderPrefix = "ap.placeholder.";
         private const int MaxPlaceholders = 32;
 
         // Cached placeholder AvailableParts from PartLoader, indexed 0..N-1.
