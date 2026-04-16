@@ -32,6 +32,9 @@ namespace KSPArchipelago
     /// </summary>
     internal class MissionTracker
     {
+        /// Number of locations already checked (from persisted state).
+        public int CheckedCount => state?.CheckedLocationIds?.Count ?? 0;
+
         // Kerbin altitude check thresholds in metres (location names use km).
         private static readonly int[] KerbinAltThresholds = { 5000, 15000, 25000, 35000, 45000, 55000, 70000 };
 
@@ -357,7 +360,7 @@ namespace KSPArchipelago
             }
         }
 
-        // Reports the next unchecked slot for a body/event pair (up to event scale).
+        // Reports all unchecked slots for a body/event pair (up to event scale).
         private void ReportBodyEvent(string bodyName, string eventName)
         {
             if (!EventScale.TryGetValue(eventName, out int scale))
@@ -369,9 +372,12 @@ namespace KSPArchipelago
             state.BodyEventCounts.TryGetValue(key, out int count);
             if (count >= scale)
                 return; // all slots already reported
-            count++;
+            while (count < scale)
+            {
+                count++;
+                ReportLocation($"{bodyName} {eventName} {count}", grantScience: true);
+            }
             state.BodyEventCounts[key] = count;
-            ReportLocation($"{bodyName} {eventName} {count}", grantScience: true);
         }
 
         // ------------------------------------------------------------------
