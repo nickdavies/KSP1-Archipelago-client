@@ -43,6 +43,8 @@ namespace KSPArchipelago
             {
                 if (ResearchAndDevelopment.Instance != null)
                     ResearchAndDevelopment.Instance.AddScience(amount, TransactionReasons.Cheating);
+                if (ApScenarioModule.Instance != null)
+                    ApScenarioModule.Instance.TotalApScienceAwarded += amount;
                 toastText = $"AP: Received {itemName} (+{amount} science)";
                 ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
                 PostToMessageSystem(received, toastText);
@@ -146,6 +148,39 @@ namespace KSPArchipelago
             ScrubTechTree();
             SetExperimentalParts(session);
         }
+
+        /// <summary>
+        /// Computes expected total science from all received science packs,
+        /// compares against what the save file says was already awarded,
+        /// and awards only the delta. This makes reconnects idempotent and
+        /// save/load revert correctly (since TotalApScienceAwarded is save-tied).
+        /// </summary>
+        public static void ReconcileApScience(ArchipelagoSession session)
+        {
+            if (session == null || ResearchAndDevelopment.Instance == null) return;
+
+            float expectedScience = 0f;
+            foreach (var item in session.Items.AllItemsReceived)
+            {
+                if (item.ItemName != null && SciencePackAmounts.TryGetValue(item.ItemName, out float amount))
+                    expectedScience += amount;
+            }
+
+            float alreadyAwarded = ApScenarioModule.Instance?.TotalApScienceAwarded ?? 0f;
+            float delta = expectedScience - alreadyAwarded;
+
+            if (delta > 0.01f)
+            {
+                ResearchAndDevelopment.Instance.AddScience(delta, TransactionReasons.Cheating);
+                if (ApScenarioModule.Instance != null)
+                    ApScenarioModule.Instance.TotalApScienceAwarded = expectedScience;
+                Debug.Log($"[KSP-AP] ReconcileApScience: expected={expectedScience}, awarded={alreadyAwarded}, delta={delta}");
+            }
+            else
+            {
+                Debug.Log($"[KSP-AP] ReconcileApScience: no delta (expected={expectedScience}, awarded={alreadyAwarded})");
+            }
+        }
     }
 
     [KSPAddon(KSPAddon.Startup.Instantly, true)]
@@ -185,6 +220,12 @@ namespace KSPArchipelago
 
         // Items received on the network thread, processed on the main thread.
         private readonly ConcurrentQueue<ReceivedItem> pendingItems = new ConcurrentQueue<ReceivedItem>();
+
+        // Backlog suppression: items in AllItemsReceived at connect time are
+        // handled in bulk by ResetParts + ReconcileApScience, so we skip
+        // their individual toasts/messages.
+        private int _backlogSize = 0;
+        private int _backlogCounter = 0;
 
         private void Start()
         {
@@ -227,6 +268,13 @@ namespace KSPArchipelago
                 Debug.LogWarning($"[KSP-AP] Received item with unknown ID: {item.ItemId}");
                 return;
             }
+
+            // Backlog items are already handled by ResetParts + ReconcileApScience.
+            // Skip enqueueing to avoid duplicate toasts, messages, and science.
+            _backlogCounter++;
+            if (_backlogCounter <= _backlogSize)
+                return;
+
             pendingItems.Enqueue(new ReceivedItem
             {
                 ItemName = itemName,
@@ -250,8 +298,6 @@ namespace KSPArchipelago
                 TechSlotsPerNode = loginData.SlotData.TryGetValue("tech_slots_per_node", out object tsObj)
                     ? Convert.ToInt32(tsObj) : 4;
                 ConnectedSlot = slotName;
-                ItemsReceivedCount = 0;
-                LocationsCheckedCount = 0;
 
                 // Parse node_bands from slot data.
                 NodeBands = new Dictionary<string, int>();
@@ -271,13 +317,23 @@ namespace KSPArchipelago
                 }
                 Debug.Log($"[KSP-AP] Restored R&D level to {RDLevel} from {newSession.Items.AllItemsReceived.Count} received items");
 
+                // Set backlog size before subscribing so the callback can
+                // skip items that are already handled in bulk below.
+                _backlogSize = newSession.Items.AllItemsReceived.Count;
+                _backlogCounter = 0;
+
                 session.Items.ItemReceived += HandleItemReceived;
 
                 missionTracker.Initialize(session, Difficulty, TechSlotsPerNode, () => LocationsCheckedCount++);
 
+                // Restore UI counters from session/tracker state.
+                ItemsReceivedCount = newSession.Items.AllItemsReceived.Count;
+                LocationsCheckedCount = missionTracker.CheckedCount;
+
                 if (gameLoaded)
                 {
                     KSPArchipelagoPartsManager.ResetParts(session);
+                    KSPArchipelagoPartsManager.ReconcileApScience(session);
                 }
             }
         }
@@ -299,6 +355,7 @@ namespace KSPArchipelago
             {
                 gameLoaded = true;
                 KSPArchipelagoPartsManager.ResetParts(session);
+                KSPArchipelagoPartsManager.ReconcileApScience(session);
             }
         }
 
