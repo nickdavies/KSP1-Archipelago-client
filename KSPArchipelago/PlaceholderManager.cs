@@ -27,6 +27,11 @@ namespace KSPArchipelago
         private readonly Dictionary<string, List<SlotEntry>> nodeEntries =
             new Dictionary<string, List<SlotEntry>>();
 
+        // Original science costs for band-locked nodes (nodeId → original cost).
+        // Used to restore costs when the node becomes unlockable.
+        private readonly Dictionary<string, int> originalCosts =
+            new Dictionary<string, int>();
+
         private struct SlotEntry
         {
             public int Slot;               // AP slot number (1-based)
@@ -173,6 +178,11 @@ namespace KSPArchipelago
                 rdNode.tech.partsAssigned.Add(placeholder);
                 inUseBy[placeholderIdx] = info.NodeId;
 
+                // Prevent purchase by setting science cost impossibly high.
+                if (!originalCosts.ContainsKey(info.NodeId))
+                    originalCosts[info.NodeId] = rdNode.tech.scienceCost;
+                rdNode.tech.scienceCost = int.MaxValue;
+
                 nodeEntries[info.NodeId] = new List<SlotEntry>
                 {
                     new SlotEntry { Slot = 0, Part = placeholder, PlaceholderIndex = placeholderIdx }
@@ -258,6 +268,13 @@ namespace KSPArchipelago
             {
                 foreach (SlotEntry entry in entries)
                     rdNode.tech.partsAssigned.Remove(entry.Part);
+
+                // Restore original science cost if we inflated it.
+                if (originalCosts.TryGetValue(nodeId, out int cost))
+                {
+                    rdNode.tech.scienceCost = cost;
+                    originalCosts.Remove(nodeId);
+                }
             }
 
             // Free placeholders back to pool.
@@ -359,6 +376,7 @@ namespace KSPArchipelago
             ClearAllFromUI();
             nodeEntries.Clear();
             inUseBy.Clear();
+            originalCosts.Clear();
             initialized = false;
         }
 

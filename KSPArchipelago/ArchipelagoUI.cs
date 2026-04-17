@@ -143,6 +143,24 @@ namespace KSPArchipelago
             GUILayout.Label($"Items received:      {mod.ItemsReceivedCount}");
             GUILayout.Label($"Locations checked:   {mod.LocationsCheckedCount}");
             GUILayout.Space(8);
+            if (GUILayout.Button("Re-award All Items"))
+            {
+                var scenario = ApScenarioModule.Instance;
+                if (scenario != null && ResearchAndDevelopment.Instance != null)
+                {
+                    // Undo all previously awarded science.
+                    ResearchAndDevelopment.Instance.AddScience(
+                        -scenario.TotalApScienceAwarded, TransactionReasons.Cheating);
+                    scenario.TotalApScienceAwarded = 0;
+                    scenario.AwardedItemIndices.Clear();
+                }
+                KSPArchipelagoPartsManager.ScrubTechTree();
+                KSPArchipelagoPartsManager.ClearAllExperimentalParts();
+                mod.ResetProgressiveState();
+                mod.ProcessAllItems();
+                KSPArchipelagoPartsManager.ReconcileApScience(mod.Session);
+            }
+            GUILayout.Space(4);
             if (GUILayout.Button("Disconnect"))
                 mod.HandleDisconnect();
         }

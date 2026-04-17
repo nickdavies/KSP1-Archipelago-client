@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 
@@ -13,14 +12,6 @@ using Archipelago.MultiClient.Net.Helpers;
 
 namespace KSPArchipelago
 {
-    /// Item metadata passed from network thread to main thread.
-    public struct ReceivedItem
-    {
-        public string ItemName;
-        public string SenderName;
-        public string LocationName;
-    }
-
     public static class KSPArchipelagoPartsManager
     {
         private static readonly Dictionary<string, float> SciencePackAmounts = new Dictionary<string, float>
@@ -34,21 +25,33 @@ namespace KSPArchipelago
             { "Science Pack 250", 250f },
         };
 
-        public static void GiveItem(ReceivedItem received)
+        /// <summary>
+        /// Single path for all item processing. State mutations (progressive counts,
+        /// part tracking, experimental parts) always run. Toast/science only when flagged.
+        /// </summary>
+        public static void GiveItem(string itemName, string senderName,
+                                    string locationName,
+                                    bool showToast = true,
+                                    bool awardScience = true)
         {
-            string itemName = received.ItemName;
             string toastText;
 
             // Science packs: add science points directly.
             if (SciencePackAmounts.TryGetValue(itemName, out float amount))
             {
-                if (ResearchAndDevelopment.Instance != null)
-                    ResearchAndDevelopment.Instance.AddScience(amount, TransactionReasons.Cheating);
-                if (ApScenarioModule.Instance != null)
-                    ApScenarioModule.Instance.TotalApScienceAwarded += amount;
-                toastText = $"AP: Received {itemName} (+{amount} science)";
-                ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
-                PostToMessageSystem(received, toastText);
+                if (awardScience)
+                {
+                    if (ResearchAndDevelopment.Instance != null)
+                        ResearchAndDevelopment.Instance.AddScience(amount, TransactionReasons.Cheating);
+                    if (ApScenarioModule.Instance != null)
+                        ApScenarioModule.Instance.TotalApScienceAwarded += amount;
+                }
+                if (showToast)
+                {
+                    toastText = $"AP: Received {itemName} (+{amount} science)";
+                    ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                    PostToMessageSystem(senderName, locationName, toastText);
+                }
                 return;
             }
 
@@ -58,9 +61,12 @@ namespace KSPArchipelago
             if (itemName == "Progressive R&D")
             {
                 if (mod != null) mod.IncrementRDLevel();
-                toastText = $"AP: R&D Facility Upgraded to Level {mod?.RDLevel ?? 0}!";
-                ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
-                PostToMessageSystem(received, toastText);
+                if (showToast)
+                {
+                    toastText = $"AP: R&D Facility Upgraded to Level {mod?.RDLevel ?? 0}!";
+                    ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                    PostToMessageSystem(senderName, locationName, toastText);
+                }
                 return;
             }
 
@@ -71,10 +77,13 @@ namespace KSPArchipelago
             {
                 int newLevel = mod.IncrementProgressiveCount(itemName);
                 int unlocked = mod.UnlockProgressiveTier(itemName, newLevel);
-                toastText = $"AP: {itemName} Tier {newLevel} ({unlocked} parts unlocked)";
-                Debug.Log($"[KSP-AP] {itemName} → tier {newLevel}, {unlocked} parts");
-                ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
-                PostToMessageSystem(received, toastText);
+                if (showToast)
+                {
+                    toastText = $"AP: {itemName} Tier {newLevel} ({unlocked} parts unlocked)";
+                    Debug.Log($"[KSP-AP] {itemName} → tier {newLevel}, {unlocked} parts");
+                    ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                    PostToMessageSystem(senderName, locationName, toastText);
+                }
                 return;
             }
 
@@ -83,23 +92,29 @@ namespace KSPArchipelago
             AvailablePart part = PartLoader.getPartInfoByName(itemName);
             if (part != null)
             {
+                if (mod != null) mod.TrackReceivedPart(itemName);
+
                 if (mod != null && mod.IsPartTierLocked(itemName))
                 {
-                    // Part is in a progressive chain but tier not yet unlocked.
-                    // Track receipt; will unlock when the tier arrives.
-                    mod.TrackReceivedPart(itemName);
                     Debug.Log($"[KSP-AP] Part '{itemName}' received but tier-locked");
-                    toastText = $"AP: {part.title} (tier locked)";
+                    if (showToast)
+                    {
+                        toastText = $"AP: {part.title} (tier locked)";
+                        ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                        PostToMessageSystem(senderName, locationName, toastText);
+                    }
                 }
                 else
                 {
-                    if (mod != null) mod.TrackReceivedPart(itemName);
                     ResearchAndDevelopment.AddExperimentalPart(part);
                     Debug.Log($"[KSP-AP] Unlocked part '{itemName}' ({part.title})");
-                    toastText = $"AP: Unlocked {part.title}";
+                    if (showToast)
+                    {
+                        toastText = $"AP: Unlocked {part.title}";
+                        ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                        PostToMessageSystem(senderName, locationName, toastText);
+                    }
                 }
-                ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
-                PostToMessageSystem(received, toastText);
             }
             else
             {
@@ -107,15 +122,15 @@ namespace KSPArchipelago
             }
         }
 
-        private static void PostToMessageSystem(ReceivedItem received, string title)
+        private static void PostToMessageSystem(string senderName, string locationName, string title)
         {
             if (MessageSystem.Instance == null) return;
 
             string body = title;
-            if (received.SenderName != null)
-                body += $"\nFrom: {received.SenderName}";
-            if (received.LocationName != null)
-                body += $"\nLocation: {received.LocationName}";
+            if (senderName != null)
+                body += $"\nFrom: {senderName}";
+            if (locationName != null)
+                body += $"\nLocation: {locationName}";
 
             var msg = new MessageSystem.Message(
                 title, body,
@@ -134,105 +149,10 @@ namespace KSPArchipelago
             }
         }
 
-        public static void SetExperimentalParts(
-            ArchipelagoSession session,
-            Dictionary<string, Dictionary<int, List<string>>> progressiveTiers,
-            Dictionary<string, Dictionary<int, string>> progressiveRepresentatives)
+        public static void ClearAllExperimentalParts()
         {
-            if (session == null) return;
-
-            // Build part-to-progressive reverse lookup for tier gating.
-            var partProgName = new Dictionary<string, string>();
-            var partProgTier = new Dictionary<string, int>();
-            if (progressiveTiers != null)
-            {
-                foreach (var prog in progressiveTiers)
-                    foreach (var tier in prog.Value)
-                        foreach (string p in tier.Value)
-                        {
-                            partProgName[p] = prog.Key;
-                            partProgTier[p] = tier.Key;
-                        }
-            }
-
-            // Count progressive items and track individually received parts.
-            var progressiveCounts = new Dictionary<string, int>();
-            var receivedParts = new HashSet<string>();
-            foreach (var item in session.Items.AllItemsReceived)
-            {
-                if (item.ItemName == null) continue;
-                if (progressiveTiers != null && progressiveTiers.ContainsKey(item.ItemName))
-                {
-                    progressiveCounts.TryGetValue(item.ItemName, out int c);
-                    progressiveCounts[item.ItemName] = c + 1;
-                }
-                else
-                {
-                    receivedParts.Add(item.ItemName);
-                }
-            }
-
-            // Determine which parts to unlock:
-            var partsToUnlock = new HashSet<string>();
-
-            // 1. For each progressive tier unlocked, use the server-selected representative.
-            if (progressiveTiers != null && progressiveRepresentatives != null)
-            {
-                foreach (var kvp in progressiveCounts)
-                {
-                    if (!progressiveRepresentatives.TryGetValue(kvp.Key, out var repMap))
-                        continue;
-                    for (int t = 1; t <= kvp.Value; t++)
-                    {
-                        if (repMap.TryGetValue(t, out string rep)
-                            && PartLoader.getPartInfoByName(rep) != null)
-                        {
-                            partsToUnlock.Add(rep);
-                        }
-                    }
-                }
-            }
-
-            // 2. Individually received parts: unlock if their progressive tier is unlocked.
-            foreach (string partName in receivedParts)
-            {
-                if (partProgName.TryGetValue(partName, out string progName))
-                {
-                    progressiveCounts.TryGetValue(progName, out int count);
-                    if (count >= partProgTier[partName])
-                        partsToUnlock.Add(partName);
-                    // else: tier locked, skip
-                }
-                else
-                {
-                    // Not in any progressive chain — unlock directly.
-                    partsToUnlock.Add(partName);
-                }
-            }
-
-            int unlocked = 0;
             foreach (AvailablePart part in PartLoader.LoadedPartsList)
-            {
-                if (partsToUnlock.Contains(part.name))
-                {
-                    ResearchAndDevelopment.AddExperimentalPart(part);
-                    unlocked++;
-                }
-                else
-                {
-                    ResearchAndDevelopment.RemoveExperimentalPart(part);
-                }
-            }
-            Debug.Log($"[KSP-AP] SetExperimentalParts: {unlocked} unlocked ({progressiveCounts.Count} progressive items, {receivedParts.Count} individual)");
-        }
-
-        public static void ResetParts(
-            ArchipelagoSession session,
-            Dictionary<string, Dictionary<int, List<string>>> progressiveTiers,
-            Dictionary<string, Dictionary<int, string>> progressiveRepresentatives)
-        {
-            ScrubTechTree();
-            SetExperimentalParts(session, progressiveTiers, progressiveRepresentatives);
+                ResearchAndDevelopment.RemoveExperimentalPart(part);
         }
 
         /// <summary>
@@ -296,7 +216,7 @@ namespace KSPArchipelago
         private Dictionary<string, string> _partProgName = new Dictionary<string, string>();
         // Reverse lookup: part cfg_name → tier number within its progressive chain.
         private Dictionary<string, int> _partProgTier = new Dictionary<string, int>();
-        // Running count of progressive item copies received (reset on connect).
+        // Running count of progressive item copies received (reset on rebuild).
         private Dictionary<string, int> _progressiveCounts = new Dictionary<string, int>();
         // Individual parts received (for tier-gating: unlock when tier arrives).
         private HashSet<string> _receivedParts = new HashSet<string>();
@@ -390,20 +310,13 @@ namespace KSPArchipelago
         // Internal notification callback for UI.
         public event Action<string> OnItemReceived;
 
-        // Items received on the network thread, processed on the main thread.
-        private readonly ConcurrentQueue<ReceivedItem> pendingItems = new ConcurrentQueue<ReceivedItem>();
-
-        // Backlog suppression: items in AllItemsReceived at connect time are
-        // handled in bulk by ResetParts + ReconcileApScience, so we skip
-        // their individual toasts/messages.
-        private int _backlogSize = 0;
-        private int _backlogCounter = 0;
-
         // Deferred reset: HandleConnect runs on a background thread but
-        // ResetParts / ReconcileApScience call Unity APIs that must run on
-        // the main thread. This flag tells Update() to run them before
-        // processing any pending items.
+        // item processing calls Unity APIs that must run on the main thread.
+        // This flag tells Update() to do a full rebuild before processing.
         private volatile bool _needsReset = false;
+
+        // Track the last processed index for fast incremental polling.
+        private int _lastProcessedIndex = 0;
 
         private void Start()
         {
@@ -425,51 +338,97 @@ namespace KSPArchipelago
 
         private void Update()
         {
-            // Deferred reset from HandleConnect (runs on bg thread).
-            // Must run BEFORE draining pendingItems so that ScrubTechTree
-            // + SetExperimentalParts complete before GiveItem adds back
-            // any items that were in the backlog race window.
             if (_needsReset)
             {
                 _needsReset = false;
-                KSPArchipelagoPartsManager.ResetParts(session, ProgressiveTiers, ProgressiveRepresentatives);
+                KSPArchipelagoPartsManager.ScrubTechTree();
+                KSPArchipelagoPartsManager.ClearAllExperimentalParts();
+                ResetProgressiveState();
+                ProcessAllItems();
                 KSPArchipelagoPartsManager.ReconcileApScience(session);
             }
-
-            // Process items queued by the network thread on the main thread,
-            // where Unity API calls are safe.
-            while (pendingItems.TryDequeue(out ReceivedItem received))
+            else if (session != null)
             {
-                KSPArchipelagoPartsManager.GiveItem(received);
-                ItemsReceivedCount++;
-                OnItemReceived?.Invoke(received.ItemName);
+                ProcessNewItems();
             }
 
             missionTracker?.Update();
         }
 
-        public void HandleItemReceived(ReceivedItemsHelper receivedItemsHelper)
+        /// <summary>
+        /// Zero all progressive state so ProcessAllItems can rebuild from scratch.
+        /// </summary>
+        public void ResetProgressiveState()
         {
-            var item = receivedItemsHelper.DequeueItem();
-            string itemName = item.ItemName;
-            if (itemName == null)
+            RDLevel = 0;
+            _progressiveCounts = new Dictionary<string, int>();
+            _receivedParts = new HashSet<string>();
+        }
+
+        /// <summary>
+        /// Iterate ALL of AllItemsReceived and rebuild state from scratch.
+        /// Items already in AwardedItemIndices get silent processing (no toast/science).
+        /// New items get full processing and are added to the persisted set.
+        /// </summary>
+        public void ProcessAllItems()
+        {
+            if (session == null) return;
+
+            var allItems = session.Items.AllItemsReceived;
+            var awarded = ApScenarioModule.Instance?.AwardedItemIndices;
+            int count = allItems.Count;
+
+            Debug.Log($"[KSP-AP] ProcessAllItems: {count} items, {awarded?.Count ?? 0} previously awarded");
+
+            for (int i = 0; i < count; i++)
             {
-                Debug.LogWarning($"[KSP-AP] Received item with unknown ID: {item.ItemId}");
-                return;
+                var item = allItems[i];
+                if (item.ItemName == null) continue;
+
+                bool alreadyAwarded = awarded != null && awarded.Contains(i);
+                KSPArchipelagoPartsManager.GiveItem(
+                    item.ItemName, item.Player?.Alias, item.LocationName,
+                    showToast: !alreadyAwarded,
+                    awardScience: !alreadyAwarded);
+
+                if (!alreadyAwarded)
+                    awarded?.Add(i);
             }
 
-            // Backlog items are already handled by ResetParts + ReconcileApScience.
-            // Skip enqueueing to avoid duplicate toasts, messages, and science.
-            _backlogCounter++;
-            if (_backlogCounter <= _backlogSize)
-                return;
+            _lastProcessedIndex = count;
+            ItemsReceivedCount = count;
 
-            pendingItems.Enqueue(new ReceivedItem
+            Debug.Log($"[KSP-AP] ProcessAllItems complete: {awarded?.Count ?? 0} total awarded");
+        }
+
+        /// <summary>
+        /// Fast incremental path: check for new items beyond what we've already processed.
+        /// </summary>
+        private void ProcessNewItems()
+        {
+            if (session == null) return;
+
+            var allItems = session.Items.AllItemsReceived;
+            var awarded = ApScenarioModule.Instance?.AwardedItemIndices;
+            int count = allItems.Count;
+
+            if (count <= _lastProcessedIndex) return;
+
+            for (int i = _lastProcessedIndex; i < count; i++)
             {
-                ItemName = itemName,
-                SenderName = item.Player?.Alias,
-                LocationName = item.LocationName,
-            });
+                var item = allItems[i];
+                if (item.ItemName == null) continue;
+
+                KSPArchipelagoPartsManager.GiveItem(
+                    item.ItemName, item.Player?.Alias, item.LocationName,
+                    showToast: true, awardScience: true);
+
+                awarded?.Add(i);
+                ItemsReceivedCount++;
+                OnItemReceived?.Invoke(item.ItemName);
+            }
+
+            _lastProcessedIndex = count;
         }
 
         public void HandleConnect(ArchipelagoSession newSession, LoginSuccessful loginData, string slotName)
@@ -548,33 +507,9 @@ namespace KSPArchipelago
                     }
                 }
 
-                // Restore R&D level, progressive counts, and received parts from backlog.
-                RDLevel = 0;
-                _progressiveCounts = new Dictionary<string, int>();
-                _receivedParts = new HashSet<string>();
-                foreach (var item in newSession.Items.AllItemsReceived)
-                {
-                    if (item.ItemName == null) continue;
-                    if (item.ItemName == "Progressive R&D")
-                        RDLevel++;
-                    else if (ProgressiveTiers.ContainsKey(item.ItemName))
-                    {
-                        _progressiveCounts.TryGetValue(item.ItemName, out int c);
-                        _progressiveCounts[item.ItemName] = c + 1;
-                    }
-                    else if (PartLoader.getPartInfoByName(item.ItemName) != null)
-                    {
-                        _receivedParts.Add(item.ItemName);
-                    }
-                }
-                Debug.Log($"[KSP-AP] Restored R&D level={RDLevel}, {_progressiveCounts.Count} progressive items, {_receivedParts.Count} individual parts from {newSession.Items.AllItemsReceived.Count} received items");
-
-                // Set backlog size before subscribing so the callback can
-                // skip items that are already handled in bulk below.
-                _backlogSize = newSession.Items.AllItemsReceived.Count;
-                _backlogCounter = 0;
-
-                session.Items.ItemReceived += HandleItemReceived;
+                // Minimal drain handler: keeps AP library internal state clean.
+                // All real processing happens on the main thread via Update().
+                session.Items.ItemReceived += (h) => h.DequeueItem();
 
                 missionTracker.Initialize(session, Difficulty, TechSlotsPerNode, () => LocationsCheckedCount++);
 
@@ -584,8 +519,7 @@ namespace KSPArchipelago
 
                 if (gameLoaded)
                 {
-                    // Defer to main thread — Unity APIs aren't safe here
-                    // and AllItemsReceived may still be populating.
+                    // Defer to main thread — Unity APIs aren't safe here.
                     _needsReset = true;
                 }
             }
@@ -607,8 +541,9 @@ namespace KSPArchipelago
             lock (sessionLock)
             {
                 gameLoaded = true;
-                KSPArchipelagoPartsManager.ResetParts(session, ProgressiveTiers, ProgressiveRepresentatives);
-                KSPArchipelagoPartsManager.ReconcileApScience(session);
+                // ApScenarioModule.OnLoad will have restored AwardedItemIndices
+                // from the save file before Update() runs the rebuild.
+                _needsReset = true;
             }
         }
 
