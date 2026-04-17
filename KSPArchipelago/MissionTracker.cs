@@ -1,30 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-
 using UnityEngine;
 using Archipelago.MultiClient.Net;
 
 namespace KSPArchipelago
 {
-    // Persistent tracking state — serialized as JSON alongside the career save file.
-    [Serializable]
-    internal class KspApState
-    {
-        public HashSet<long> CheckedLocationIds = new HashSet<long>();
-        // "BodyName|EventName" → number of slots already reported (0..check_scale)
-        public Dictionary<string, int> BodyEventCounts = new Dictionary<string, int>();
-        public bool StartingInventoryReported = false;
-        public bool KerbinStagingDone = false;
-        public bool KerbinFirstLaunchDone = false;
-        public bool KerbinFirstLandingDone = false;
-        public bool KerbinFirstCrashDone = false;
-        // Altitude thresholds (in metres) already reported
-        public HashSet<int> AltitudesReachedMeters = new HashSet<int>();
-        // KSC biome names already reported
-        public HashSet<string> KscBiomesVisited = new HashSet<string>();
-    }
-
     /// <summary>
     /// Detects KSP mission events and reports them as Archipelago location checks.
     /// Call Initialize() after a successful AP connection.
@@ -33,8 +13,8 @@ namespace KSPArchipelago
     /// </summary>
     internal class MissionTracker
     {
-        /// Number of locations already checked (from persisted state).
-        public int CheckedCount => state?.CheckedLocationIds?.Count ?? 0;
+        /// Number of locations already checked (from AP server).
+        public int CheckedCount => checkedLocationIds?.Count ?? 0;
 
         // Kerbin altitude check thresholds in metres (location names use km).
         private static readonly int[] KerbinAltThresholds = { 5000, 15000, 25000, 35000, 45000, 55000, 70000 };
@@ -153,11 +133,15 @@ namespace KSPArchipelago
         private const float MissionScienceBonus = 5f;
 
         private ArchipelagoSession session;
-        private KspApState state;
-        private string statePath;
+        private HashSet<long> checkedLocationIds;
         private bool initialized = false;
         private int techSlotsPerNode = 4;
         private Action onLocationReported;
+
+        // Cached location IDs for hot-path guards (looked up once at init).
+        private long kerbinFirstLaunchId, kerbinFirstStagingId,
+                     kerbinFirstLandingId, kerbinFirstCrashId;
+        private Dictionary<int, long> altitudeIds;
 
         // Runtime-only: vessel persistentIds that have achieved Kerbin orbit.
         // Used to gate "Kerbin Return" — only vessels that orbited Kerbin qualify.
@@ -169,19 +153,34 @@ namespace KSPArchipelago
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Call after a successful AP connection. Loads persisted state, registers
-        /// all KSP events, and immediately reports Starting Inventory locations.
+        /// Call after a successful AP connection. Populates checked-location state
+        /// from the server, registers KSP events, and reports Starting Inventory.
         /// </summary>
         public void Initialize(ArchipelagoSession newSession, int difficulty, int techSlots = 4, Action onLocationReported = null)
         {
             session = newSession;
             this.onLocationReported = onLocationReported;
             techSlotsPerNode = techSlots;
-            LoadState();
+
+            checkedLocationIds = new HashSet<long>(session.Locations.AllLocationsChecked);
+            Debug.Log($"[KSP-AP] Loaded {checkedLocationIds.Count} checked locations from server.");
+
+            // Cache IDs for hot-path guards.
+            kerbinFirstLaunchId = LookupId("Kerbin First Launch");
+            kerbinFirstStagingId = LookupId("Kerbin First Staging");
+            kerbinFirstLandingId = LookupId("Kerbin First Landing");
+            kerbinFirstCrashId = LookupId("Kerbin First Crash");
+            altitudeIds = new Dictionary<int, long>();
+            foreach (int t in KerbinAltThresholds)
+                altitudeIds[t] = LookupId($"Kerbin {t / 1000}km Altitude");
+
             RegisterEvents();
             ReportStartingInventory(difficulty);
             initialized = true;
         }
+
+        private long LookupId(string name) =>
+            session.Locations.GetLocationIdFromName(session.ConnectionInfo.Game, name);
 
         /// <summary>Call on disconnect or mod destroy.</summary>
         public void Shutdown()
@@ -196,63 +195,6 @@ namespace KSPArchipelago
         {
             if (!initialized) return;
             PollKerbinAltitude();
-        }
-
-        // ------------------------------------------------------------------
-        // Persistent state
-        // ------------------------------------------------------------------
-
-        private string BuildStatePath()
-        {
-            string folder = HighLogic.SaveFolder ?? "default";
-            return Path.Combine(KSPUtil.ApplicationRootPath, "saves", folder, "ksp_ap_state.json");
-        }
-
-        private void LoadState()
-        {
-            statePath = BuildStatePath();
-            if (File.Exists(statePath))
-            {
-                try
-                {
-                    string json = File.ReadAllText(statePath);
-                    state = Newtonsoft.Json.JsonConvert.DeserializeObject<KspApState>(json) ?? new KspApState();
-                    Debug.Log($"[KSP-AP] Loaded state: {state.CheckedLocationIds.Count} locations checked.");
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"[KSP-AP] State load failed: {ex.Message}. Starting fresh.");
-                    state = new KspApState();
-                }
-            }
-            else
-            {
-                state = new KspApState();
-            }
-        }
-
-        private void SaveState()
-        {
-            if (state == null || statePath == null) return;
-            try
-            {
-                string json = Newtonsoft.Json.JsonConvert.SerializeObject(state, Newtonsoft.Json.Formatting.Indented);
-                File.WriteAllText(statePath, json);
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[KSP-AP] State save failed: {ex.Message}");
-            }
-        }
-
-        private void OnGameStateLoad(ConfigNode config)
-        {
-            // Save folder may have changed; reload state for the new campaign.
-            if (initialized)
-            {
-                SaveState();     // flush current before switching
-                LoadState();
-            }
         }
 
         // ------------------------------------------------------------------
@@ -294,9 +236,6 @@ namespace KSPArchipelago
                 new EventData<EventReport>.OnEvent(OnCrash));
             GameEvents.onCrashSplashdown.Add(
                 new EventData<EventReport>.OnEvent(OnCrash));
-
-            GameEvents.onGameStateLoad.Add(
-                new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
         }
 
         private void UnregisterEvents()
@@ -333,9 +272,6 @@ namespace KSPArchipelago
                 new EventData<EventReport>.OnEvent(OnCrash));
             GameEvents.onCrashSplashdown.Remove(
                 new EventData<EventReport>.OnEvent(OnCrash));
-
-            GameEvents.onGameStateLoad.Remove(
-                new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
         }
 
         // ------------------------------------------------------------------
@@ -355,14 +291,13 @@ namespace KSPArchipelago
                     Debug.LogWarning($"[KSP-AP] Unknown location: '{name}'");
                     return;
                 }
-                if (!state.CheckedLocationIds.Add(id))
+                if (!checkedLocationIds.Add(id))
                     return; // already reported
                 session.Locations.CompleteLocationChecks(id);
                 onLocationReported?.Invoke();
                 if (grantScience && ResearchAndDevelopment.Instance != null)
                     ResearchAndDevelopment.Instance.AddScience(MissionScienceBonus, TransactionReasons.ScienceTransmission);
                 Debug.Log($"[KSP-AP] Checked: {name}");
-                SaveState();
             }
             catch (Exception ex)
             {
@@ -378,16 +313,8 @@ namespace KSPArchipelago
                 Debug.LogWarning($"[KSP-AP] Unknown event type: '{eventName}'");
                 return;
             }
-            string key = $"{bodyName}|{eventName}";
-            state.BodyEventCounts.TryGetValue(key, out int count);
-            if (count >= scale)
-                return; // all slots already reported
-            while (count < scale)
-            {
-                count++;
-                ReportLocation($"{bodyName} {eventName} {count}", grantScience: true);
-            }
-            state.BodyEventCounts[key] = count;
+            for (int slot = 1; slot <= scale; slot++)
+                ReportLocation($"{bodyName} {eventName} {slot}", grantScience: true);
         }
 
         // ------------------------------------------------------------------
@@ -396,12 +323,10 @@ namespace KSPArchipelago
 
         public void ReportStartingInventory(int difficulty)
         {
-            if (state.StartingInventoryReported) return;
+            if (checkedLocationIds.Contains(LookupId("Starting Inventory 1"))) return;
             int n = DifficultyStartingCount.TryGetValue(difficulty, out int c) ? c : 15;
             for (int i = 1; i <= n; i++)
                 ReportLocation($"Starting Inventory {i}");
-            state.StartingInventoryReported = true;
-            SaveState();
         }
 
         // ------------------------------------------------------------------
@@ -505,7 +430,6 @@ namespace KSPArchipelago
                 Debug.Log($"[KSP-AP] KSC biome '{biome}' from subject '{subjectId}' did not match any location");
                 return;
             }
-            if (!state.KscBiomesVisited.Add(locationName)) return; // already reported
             Debug.Log($"[KSP-AP] KSC biome matched: '{biome}' → '{locationName}'");
             ReportLocation(locationName, grantScience: true);
         }
@@ -560,7 +484,7 @@ namespace KSPArchipelago
             double alt = v.altitude;
             foreach (int threshold in KerbinAltThresholds)
             {
-                if (alt >= threshold && state.AltitudesReachedMeters.Add(threshold))
+                if (alt >= threshold && !checkedLocationIds.Contains(altitudeIds[threshold]))
                     ReportLocation($"Kerbin {threshold / 1000}km Altitude", grantScience: true);
             }
         }
@@ -631,9 +555,8 @@ namespace KSPArchipelago
             if (body == "Kerbin"
                 && data.from == Vessel.Situations.PRELAUNCH
                 && (data.to == Vessel.Situations.FLYING || data.to == Vessel.Situations.SUB_ORBITAL)
-                && !state.KerbinFirstLaunchDone)
+                && !checkedLocationIds.Contains(kerbinFirstLaunchId))
             {
-                state.KerbinFirstLaunchDone = true;
                 ReportLocation("Kerbin First Launch", grantScience: true);
             }
 
@@ -642,9 +565,8 @@ namespace KSPArchipelago
             if (body == "Kerbin"
                 && data.to == Vessel.Situations.LANDED
                 && (data.from == Vessel.Situations.FLYING || data.from == Vessel.Situations.SUB_ORBITAL)
-                && !state.KerbinFirstLandingDone)
+                && !checkedLocationIds.Contains(kerbinFirstLandingId))
             {
-                state.KerbinFirstLandingDone = true;
                 ReportLocation("Kerbin First Landing", grantScience: true);
             }
         }
@@ -681,10 +603,9 @@ namespace KSPArchipelago
 
         private void OnStageSeparation(EventReport report)
         {
-            if (state.KerbinStagingDone) return;
+            if (checkedLocationIds.Contains(kerbinFirstStagingId)) return;
             Vessel v = FlightGlobals.ActiveVessel;
             if (v == null || v.mainBody?.name != "Kerbin") return;
-            state.KerbinStagingDone = true;
             ReportLocation("Kerbin First Staging", grantScience: true);
         }
 
@@ -692,9 +613,8 @@ namespace KSPArchipelago
         // We only care about the first crash ever on Kerbin.
         private void OnCrash(EventReport report)
         {
-            if (state.KerbinFirstCrashDone) return;
+            if (checkedLocationIds.Contains(kerbinFirstCrashId)) return;
             if (report.origin?.vessel?.mainBody?.name != "Kerbin") return;
-            state.KerbinFirstCrashDone = true;
             ReportLocation("Kerbin First Crash", grantScience: true);
         }
 
