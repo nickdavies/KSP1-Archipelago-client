@@ -18,6 +18,7 @@ namespace KSPArchipelago
         public bool KerbinStagingDone = false;
         public bool KerbinFirstLaunchDone = false;
         public bool KerbinFirstLandingDone = false;
+        public bool KerbinFirstCrashDone = false;
         // Altitude thresholds (in metres) already reported
         public HashSet<int> AltitudesReachedMeters = new HashSet<int>();
         // KSC biome names already reported
@@ -70,6 +71,7 @@ namespace KSPArchipelago
             {"MissionControl",   "KSC Mission Control"},
             {"Crawlerway",       "KSC Crawlerway"},
             {"R&D",              "KSC R&D"},
+            {"KSC",              "KSC Grounds"},
         };
 
         // Tech tree node_id → display_name  (from data/tech_tree.json — must stay in sync).
@@ -288,6 +290,10 @@ namespace KSPArchipelago
                 new EventData<float, ScienceSubject, ProtoVessel, bool>.OnEvent(OnScienceReceived));
             GameEvents.onVesselRecovered.Add(
                 new EventData<ProtoVessel, bool>.OnEvent(OnVesselRecovered));
+            GameEvents.onCrash.Add(
+                new EventData<EventReport>.OnEvent(OnCrash));
+            GameEvents.onCrashSplashdown.Add(
+                new EventData<EventReport>.OnEvent(OnCrash));
 
             GameEvents.onGameStateLoad.Add(
                 new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
@@ -323,6 +329,10 @@ namespace KSPArchipelago
                 new EventData<float, ScienceSubject, ProtoVessel, bool>.OnEvent(OnScienceReceived));
             GameEvents.onVesselRecovered.Remove(
                 new EventData<ProtoVessel, bool>.OnEvent(OnVesselRecovered));
+            GameEvents.onCrash.Remove(
+                new EventData<EventReport>.OnEvent(OnCrash));
+            GameEvents.onCrashSplashdown.Remove(
+                new EventData<EventReport>.OnEvent(OnCrash));
 
             GameEvents.onGameStateLoad.Remove(
                 new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
@@ -616,6 +626,16 @@ namespace KSPArchipelago
             if (v == null || v.mainBody?.name != "Kerbin") return;
             state.KerbinStagingDone = true;
             ReportLocation("Kerbin First Staging", grantScience: true);
+        }
+
+        // onCrash / onCrashSplashdown fire per-part on impact destruction.
+        // We only care about the first crash ever on Kerbin.
+        private void OnCrash(EventReport report)
+        {
+            if (state.KerbinFirstCrashDone) return;
+            if (report.origin?.vessel?.mainBody?.name != "Kerbin") return;
+            state.KerbinFirstCrashDone = true;
+            ReportLocation("Kerbin First Crash", grantScience: true);
         }
 
         private void OnCrewOnEva(GameEvents.FromToAction<Part, Part> action)
