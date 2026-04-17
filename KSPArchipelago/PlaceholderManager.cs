@@ -336,6 +336,22 @@ namespace KSPArchipelago
         }
 
         /// <summary>
+        /// Clear all band-locked placeholder entries (Slot == 0) from both UI and cache.
+        /// Called when R&D level changes so nodes can be re-classified as purchasable.
+        /// </summary>
+        public void ClearBandLockedNodes()
+        {
+            var ids = new List<string>();
+            foreach (var kvp in nodeEntries)
+            {
+                if (kvp.Value.Count == 1 && kvp.Value[0].Slot == 0)
+                    ids.Add(kvp.Key);
+            }
+            foreach (string nodeId in ids)
+                ClearNode(nodeId);
+        }
+
+        /// <summary>
         /// Full reset — clear everything including cached data. Call on AP disconnect.
         /// </summary>
         public void Reset()

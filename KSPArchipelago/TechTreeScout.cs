@@ -74,6 +74,14 @@ namespace KSPArchipelago
         private void Start()
         {
             mod = FindObjectOfType<KSPArchipelagoMod>();
+            if (mod != null)
+                mod.OnItemReceived += OnItemReceived;
+        }
+
+        private void OnDestroy()
+        {
+            if (mod != null)
+                mod.OnItemReceived -= OnItemReceived;
         }
 
         private void Update()
@@ -415,6 +423,23 @@ namespace KSPArchipelago
 
             if (scoutedByNode.Count > 0)
                 placeholderManager.UpdateWithScoutData(scoutedByNode);
+        }
+
+        /// <summary>
+        /// Called when any AP item is received. If the R&D tree is open,
+        /// triggers a re-evaluation of node states so the UI stays in sync.
+        /// </summary>
+        private void OnItemReceived(string itemName)
+        {
+            if (!rdWasOpen) return;
+
+            if (itemName == "Progressive R&D")
+            {
+                // R&D level changed — band-locked nodes may now be purchasable.
+                placeholderManager.ClearBandLockedNodes();
+            }
+
+            needsRescount = true;
         }
 
         /// <summary>
