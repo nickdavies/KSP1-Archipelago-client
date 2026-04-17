@@ -399,6 +399,12 @@ namespace KSPArchipelago
         private int _backlogSize = 0;
         private int _backlogCounter = 0;
 
+        // Deferred reset: HandleConnect runs on a background thread but
+        // ResetParts / ReconcileApScience call Unity APIs that must run on
+        // the main thread. This flag tells Update() to run them before
+        // processing any pending items.
+        private volatile bool _needsReset = false;
+
         private void Start()
         {
             DontDestroyOnLoad(this);
@@ -419,6 +425,17 @@ namespace KSPArchipelago
 
         private void Update()
         {
+            // Deferred reset from HandleConnect (runs on bg thread).
+            // Must run BEFORE draining pendingItems so that ScrubTechTree
+            // + SetExperimentalParts complete before GiveItem adds back
+            // any items that were in the backlog race window.
+            if (_needsReset)
+            {
+                _needsReset = false;
+                KSPArchipelagoPartsManager.ResetParts(session, ProgressiveTiers, ProgressiveRepresentatives);
+                KSPArchipelagoPartsManager.ReconcileApScience(session);
+            }
+
             // Process items queued by the network thread on the main thread,
             // where Unity API calls are safe.
             while (pendingItems.TryDequeue(out ReceivedItem received))
@@ -567,8 +584,9 @@ namespace KSPArchipelago
 
                 if (gameLoaded)
                 {
-                    KSPArchipelagoPartsManager.ResetParts(session, ProgressiveTiers, ProgressiveRepresentatives);
-                    KSPArchipelagoPartsManager.ReconcileApScience(session);
+                    // Defer to main thread — Unity APIs aren't safe here
+                    // and AllItemsReceived may still be populating.
+                    _needsReset = true;
                 }
             }
         }
