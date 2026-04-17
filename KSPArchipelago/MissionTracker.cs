@@ -405,6 +405,66 @@ namespace KSPArchipelago
         }
 
         // ------------------------------------------------------------------
+        // Surface sample detection
+        // ------------------------------------------------------------------
+
+        private const string SurfaceSamplePrefix = "surfaceSample@";
+
+        // Extracts the body name from a surfaceSample subject ID.
+        // Format: surfaceSample@{Body}Srf{Landed|Splashed}{Biome}
+        private static string ExtractSampleBody(string subjectId)
+        {
+            if (!subjectId.StartsWith(SurfaceSamplePrefix, StringComparison.Ordinal))
+                return null;
+            int srfIdx = subjectId.IndexOf("Srf", SurfaceSamplePrefix.Length, StringComparison.Ordinal);
+            if (srfIdx <= SurfaceSamplePrefix.Length) return null;
+            return subjectId.Substring(SurfaceSamplePrefix.Length, srfIdx - SurfaceSamplePrefix.Length);
+        }
+
+        // Returns all body names that have surface-sample data on a ProtoVessel.
+        private HashSet<string> CollectSurfaceSampleBodies(ProtoVessel vessel)
+        {
+            var bodies = new HashSet<string>();
+            foreach (ProtoPartSnapshot part in vessel.protoPartSnapshots)
+            {
+                foreach (ProtoPartModuleSnapshot module in part.modules)
+                {
+                    if (module.moduleName != "ModuleScienceExperiment" &&
+                        module.moduleName != "ModuleScienceContainer")
+                        continue;
+                    foreach (ConfigNode dataNode in module.moduleValues.GetNodes("ScienceData"))
+                    {
+                        string body = ExtractSampleBody(dataNode.GetValue("subjectID") ?? "");
+                        if (body != null) bodies.Add(body);
+                    }
+                }
+            }
+            return bodies;
+        }
+
+        // Returns all body names that have surface-sample data on a live Vessel.
+        private HashSet<string> CollectSurfaceSampleBodies(Vessel vessel)
+        {
+            var bodies = new HashSet<string>();
+            foreach (Part part in vessel.Parts)
+            {
+                foreach (PartModule module in part.Modules)
+                {
+                    IScienceDataContainer container = module as IScienceDataContainer;
+                    if (container == null) continue;
+                    ScienceData[] data = container.GetData();
+                    if (data == null) continue;
+                    foreach (ScienceData d in data)
+                    {
+                        string body = ExtractSampleBody(d.subjectID ?? "");
+                        if (body != null) bodies.Add(body);
+                    }
+                }
+            }
+            return bodies;
+        }
+
+        // ------------------------------------------------------------------
         // KSC biome science detection
         // ------------------------------------------------------------------
 
@@ -465,10 +525,9 @@ namespace KSPArchipelago
         {
             if (vessel == null) return;
 
-            // Kerbin Sample Return: recovering any crewed vessel on Kerbin
-            // (includes EVA kerbals, which don't trigger OnLand).
-            if (vessel.GetVesselCrew().Count > 0)
-                ReportBodyEvent("Kerbin", "Sample Return");
+            // Award Sample Return for every body whose surface sample is on board.
+            foreach (string body in CollectSurfaceSampleBodies(vessel))
+                ReportBodyEvent(body, "Sample Return");
 
             foreach (ProtoPartSnapshot part in vessel.protoPartSnapshots)
             {
@@ -548,8 +607,8 @@ namespace KSPArchipelago
                 if (_vesselsOrbitedKerbin.Contains(vessel.persistentId))
                 {
                     ReportBodyEvent("Kerbin", "Return");
-                    if (vessel.GetCrewCount() > 0)
-                        ReportBodyEvent("Kerbin", "Sample Return");
+                    foreach (string sampleBody in CollectSurfaceSampleBodies(vessel))
+                        ReportBodyEvent(sampleBody, "Sample Return");
                 }
                 return;
             }
@@ -612,7 +671,8 @@ namespace KSPArchipelago
         private void OnReturnFromSurface(Vessel vessel, CelestialBody body)
         {
             ReportBodyEvent(body.name, "Return");
-            ReportBodyEvent(body.name, "Sample Return");
+            foreach (string sampleBody in CollectSurfaceSampleBodies(vessel))
+                ReportBodyEvent(sampleBody, "Sample Return");
             // Also count as a Kerbin landing (deorbit + recovery)
             ReportBodyEvent("Kerbin", "Landing");
             if (vessel.GetCrewCount() > 0)
