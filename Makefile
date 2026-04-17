@@ -36,7 +36,7 @@ install: stage
 
 # Build, install, then launch KSP.
 run: install
-	(sleep 15 && xdotool search --name "Kerbal Space Program" windowmap windowmove 100 100 windowfocus windowraise) & \
+	(sleep 15 && export KSP_ID=$$(xdotool search --class "KSP.x86_64") && xdotool windowmap --sync $$KSP_ID && xdotool windowmove $$KSP_ID 100 100 && xdotool windowfocus $$KSP_ID && xdotool windowraise $$KSP_ID) & \
 	"$(KSP_DIR)/KSP.x86_64" > $(LOG) 2>&1
 
 clean:
