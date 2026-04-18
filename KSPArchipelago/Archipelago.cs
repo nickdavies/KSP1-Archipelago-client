@@ -11,7 +11,7 @@ namespace Archipelago
     public class APConsole
     {
         // Must match KSP1World.game in the Python world.
-        public const string GameName = "Kerbal Space Program";
+        public const string GameName = "Kerbal Space Program 1";
 
         private const string ConnectUsage = "/connect <address>[:<port>] <slot> [<password>]";
         private const int DefaultPort = 38281;
