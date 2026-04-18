@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Download KSP reference assemblies
+        run: make deps
+
+      - name: Build and stage
+        run: make stage
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KSPArchipelago
+          path: out/KSPArchipelago/
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: KSPArchipelago
+          path: KSPArchipelago
+
+      - name: Create release zip
+        run: zip -r KSPArchipelago.zip KSPArchipelago/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: KSPArchipelago.zip
+          generate_release_notes: true
