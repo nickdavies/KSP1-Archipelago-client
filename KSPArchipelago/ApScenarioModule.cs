@@ -17,6 +17,7 @@ namespace KSPArchipelago
 
         public float TotalApScienceAwarded;
         public HashSet<int> AwardedItemIndices = new HashSet<int>();
+        public HashSet<string> PendingLocationNames = new HashSet<string>();
 
         public override void OnAwake()
         {
@@ -27,6 +28,8 @@ namespace KSPArchipelago
         {
             node.AddValue("apScience", TotalApScienceAwarded);
             node.AddValue("awardedItems", string.Join(",", AwardedItemIndices));
+            if (PendingLocationNames.Count > 0)
+                node.AddValue("pendingLocations", string.Join("|", PendingLocationNames));
         }
 
         public override void OnLoad(ConfigNode node)
@@ -38,6 +41,13 @@ namespace KSPArchipelago
                 foreach (string s in raw.Split(','))
                     if (int.TryParse(s.Trim(), out int idx))
                         AwardedItemIndices.Add(idx);
+
+            PendingLocationNames = new HashSet<string>();
+            string pendingRaw = node.GetValue("pendingLocations");
+            if (!string.IsNullOrEmpty(pendingRaw))
+                foreach (string s in pendingRaw.Split('|'))
+                    if (!string.IsNullOrEmpty(s))
+                        PendingLocationNames.Add(s);
         }
     }
 }

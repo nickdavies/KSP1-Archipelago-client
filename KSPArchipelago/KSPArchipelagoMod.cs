@@ -341,6 +341,9 @@ namespace KSPArchipelago
             if (_needsReset)
             {
                 _needsReset = false;
+                // OnLoad creates a new HashSet; re-share the reference with the tracker.
+                if (missionTracker != null && ApScenarioModule.Instance != null)
+                    missionTracker.SetPendingNames(ApScenarioModule.Instance.PendingLocationNames);
                 KSPArchipelagoPartsManager.ScrubTechTree();
                 KSPArchipelagoPartsManager.ClearAllExperimentalParts();
                 ResetProgressiveState();
@@ -511,7 +514,11 @@ namespace KSPArchipelago
                 // All real processing happens on the main thread via Update().
                 session.Items.ItemReceived += (h) => h.DequeueItem();
 
-                missionTracker.Initialize(session, Difficulty, TechSlotsPerNode, () => LocationsCheckedCount++);
+                // Share the pending-names set with the tracker so ApScenarioModule
+                // sees offline-queued locations when KSP saves.
+                if (ApScenarioModule.Instance != null)
+                    missionTracker.SetPendingNames(ApScenarioModule.Instance.PendingLocationNames);
+                missionTracker.OnConnect(session, Difficulty, TechSlotsPerNode, () => LocationsCheckedCount++);
 
                 // Restore UI counters from session/tracker state.
                 ItemsReceivedCount = newSession.Items.AllItemsReceived.Count;
@@ -529,7 +536,7 @@ namespace KSPArchipelago
         {
             lock (sessionLock)
             {
-                missionTracker?.Shutdown();
+                missionTracker?.OnDisconnect();
                 FindObjectOfType<TechTreeScout>()?.OnDisconnect();
                 session = null;
                 ConnectedSlot = null;
@@ -560,7 +567,7 @@ namespace KSPArchipelago
         {
             GameEvents.onGameStateLoad.Remove(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
             GameEvents.onGameSceneLoadRequested.Remove(OnSceneChange);
-            missionTracker?.Shutdown();
+            missionTracker?.Destroy();
         }
     }
 }

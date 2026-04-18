@@ -7,9 +7,10 @@ namespace KSPArchipelago
 {
     /// <summary>
     /// Detects KSP mission events and reports them as Archipelago location checks.
-    /// Call Initialize() after a successful AP connection.
+    /// Call OnConnect() after a successful AP connection (registers events on first call).
     /// Call Update() from the MonoBehaviour Update loop for altitude polling.
-    /// Call Shutdown() on disconnect.
+    /// Call OnDisconnect() on disconnect (events stay registered, offline checks are queued).
+    /// Call Destroy() on mod teardown to unregister events.
     /// </summary>
     internal class MissionTracker
     {
@@ -135,8 +136,13 @@ namespace KSPArchipelago
         private ArchipelagoSession session;
         private HashSet<long> checkedLocationIds;
         private bool initialized = false;
+        private bool eventsRegistered = false;
         private int techSlotsPerNode = 4;
         private Action onLocationReported;
+
+        // Locations detected while offline, queued for sending on reconnect.
+        // Shared reference with ApScenarioModule for save/load persistence.
+        private HashSet<string> pendingLocationNames = new HashSet<string>();
 
         // Cached location IDs for hot-path guards (looked up once at init).
         private long kerbinFirstLaunchId, kerbinFirstStagingId,
@@ -154,9 +160,10 @@ namespace KSPArchipelago
 
         /// <summary>
         /// Call after a successful AP connection. Populates checked-location state
-        /// from the server, registers KSP events, and reports Starting Inventory.
+        /// from the server, registers events on first call, flushes any offline
+        /// queued checks, and reports Starting Inventory.
         /// </summary>
-        public void Initialize(ArchipelagoSession newSession, int difficulty, int techSlots = 4, Action onLocationReported = null)
+        public void OnConnect(ArchipelagoSession newSession, int difficulty, int techSlots = 4, Action onLocationReported = null)
         {
             session = newSession;
             this.onLocationReported = onLocationReported;
@@ -174,7 +181,13 @@ namespace KSPArchipelago
             foreach (int t in KerbinAltThresholds)
                 altitudeIds[t] = LookupId($"Kerbin {t / 1000}km Altitude");
 
-            RegisterEvents();
+            if (!eventsRegistered)
+            {
+                RegisterEvents();
+                eventsRegistered = true;
+            }
+
+            FlushPending();
             ReportStartingInventory(difficulty);
             initialized = true;
         }
@@ -182,12 +195,32 @@ namespace KSPArchipelago
         private long LookupId(string name) =>
             session.Locations.GetLocationIdFromName(session.ConnectionInfo.Game, name);
 
-        /// <summary>Call on disconnect or mod destroy.</summary>
-        public void Shutdown()
+        /// <summary>
+        /// Call on server disconnect. Nulls session but keeps events registered
+        /// so checks detected while offline are queued for later.
+        /// </summary>
+        public void OnDisconnect()
         {
-            UnregisterEvents();
+            session = null;
+        }
+
+        /// <summary>Call on mod teardown to unregister KSP events.</summary>
+        public void Destroy()
+        {
+            if (eventsRegistered)
+            {
+                UnregisterEvents();
+                eventsRegistered = false;
+            }
             session = null;
             initialized = false;
+        }
+
+        public HashSet<string> GetPendingNames() => pendingLocationNames;
+
+        public void SetPendingNames(HashSet<string> names)
+        {
+            pendingLocationNames = names ?? new HashSet<string>();
         }
 
         /// <summary>Call from MonoBehaviour.Update() for altitude polling.</summary>
@@ -279,10 +312,20 @@ namespace KSPArchipelago
         // ------------------------------------------------------------------
 
         /// Reports a location by name to the AP server, idempotent.
+        /// When offline, queues the name for sending on reconnect.
         /// When grantScience is true, awards a small science bonus on first report.
         private void ReportLocation(string name, bool grantScience = false)
         {
-            if (session == null) return;
+            if (session == null)
+            {
+                if (!initialized) return; // never connected — ignore pre-connection events
+                if (!pendingLocationNames.Add(name)) return; // already queued
+                onLocationReported?.Invoke();
+                if (grantScience && ResearchAndDevelopment.Instance != null)
+                    ResearchAndDevelopment.Instance.AddScience(MissionScienceBonus, TransactionReasons.ScienceTransmission);
+                Debug.Log($"[KSP-AP] Queued (offline): {name}");
+                return;
+            }
             try
             {
                 long id = session.Locations.GetLocationIdFromName(session.ConnectionInfo.Game, name);
@@ -315,6 +358,28 @@ namespace KSPArchipelago
             }
             for (int slot = 1; slot <= scale; slot++)
                 ReportLocation($"{bodyName} {eventName} {slot}", grantScience: true);
+        }
+
+        /// <summary>
+        /// Sends any locations queued while offline to the now-connected server.
+        /// </summary>
+        private void FlushPending()
+        {
+            if (pendingLocationNames.Count == 0) return;
+            Debug.Log($"[KSP-AP] Flushing {pendingLocationNames.Count} pending offline locations");
+            foreach (string name in new List<string>(pendingLocationNames))
+            {
+                long id = session.Locations.GetLocationIdFromName(session.ConnectionInfo.Game, name);
+                if (id < 0)
+                {
+                    Debug.LogWarning($"[KSP-AP] Flush: unknown location '{name}', skipping");
+                    continue;
+                }
+                if (!checkedLocationIds.Add(id)) continue; // server already has it
+                session.Locations.CompleteLocationChecks(id);
+                Debug.Log($"[KSP-AP] Flushed: {name}");
+            }
+            pendingLocationNames.Clear();
         }
 
         // ------------------------------------------------------------------
