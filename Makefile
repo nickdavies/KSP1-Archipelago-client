@@ -1,22 +1,37 @@
-KSP_DIR     ?= $(HOME)/.local/share/Steam/steamapps/common/Kerbal Space Program
-MOD_SUBDIR  ?= GameData/KSPArchipelago
-OUT_DIR      = out/KSPArchipelago
-BUILD_DIR    = KSPArchipelago/bin/Release/net40
-LAUNCHER_DIR = $(KSP_DIR)/KSPLauncher_Data/Managed
-LOG          = $(HOME)/workspaces/ksp_ap/ksp_stdout_stderr.log
+# Where KSP is installed (for deploy + run only)
+KSP_DIR      ?= $(HOME)/.local/share/Steam/steamapps/common/Kerbal Space Program
+MOD_SUBDIR   ?= GameData/KSPArchipelago
+# Stripped reference assemblies for compilation (downloaded by `make deps`)
+STUBS_DIR     = lib/ksp-stubs
+OUT_DIR       = out/KSPArchipelago
+BUILD_DIR     = KSPArchipelago/bin/Release/net40
+LOG           = $(HOME)/workspaces/ksp_ap/ksp_stdout_stderr.log
 
-.PHONY: all compile stage install run clean
+.PHONY: all compile stage install run clean deps
 
 all: stage
+
+# Download KSP stripped reference assemblies for compilation.
+deps:
+	mkdir -p $(STUBS_DIR)
+	curl -sL https://github.com/KSPModdingLibs/KSPLibs/raw/main/KSP-1.12.5.zip -o /tmp/ksp-libs.zip
+	unzip -qo /tmp/ksp-libs.zip -d $(STUBS_DIR)
+	ln -sfn KSP_x64_Data $(STUBS_DIR)/KSP_Data
+	rm -f /tmp/ksp-libs.zip
 
 # Generate placeholder parts cfg directly into the staging directory.
 $(OUT_DIR)/ap_placeholders.cfg: scripts/generate_placeholders.py
 	mkdir -p $(OUT_DIR)
 	python3 $< $@
 
-# Compile the mod. dotnet handles incremental builds internally.
+# Compile the mod using stripped reference assemblies.
 compile:
-	dotnet build -c Release KSPArchipelago/KSPArchipelago.csproj
+	@test -d $(STUBS_DIR)/KSP_Data || { echo "Run 'make deps' first to download KSP reference assemblies"; exit 1; }
+	dotnet build -c Release -p:KspDir="$(CURDIR)/$(STUBS_DIR)" KSPArchipelago/KSPArchipelago.csproj
+
+# Find a DLL by name: check build output, then NuGet cache.
+find-dll = $(firstword $(wildcard $(BUILD_DIR)/$(1)) \
+             $(shell find $(HOME)/.nuget -name "$(1)" -path "*net40*" ! -path "*/Profile/*" 2>/dev/null | head -1))
 
 # Assemble the mod into out/KSPArchipelago.
 stage: compile $(OUT_DIR)/ap_placeholders.cfg
@@ -25,8 +40,8 @@ stage: compile $(OUT_DIR)/ap_placeholders.cfg
 	cp $(BUILD_DIR)/Archipelago.MultiClient.Net.dll  $(OUT_DIR)/
 	cp $(BUILD_DIR)/Newtonsoft.Json.dll              $(OUT_DIR)/
 	cp $(BUILD_DIR)/websocket-sharp.dll              $(OUT_DIR)/
-	cp "$(LAUNCHER_DIR)/System.Numerics.dll"              $(OUT_DIR)/
-	cp "$(LAUNCHER_DIR)/System.Runtime.Serialization.dll" $(OUT_DIR)/
+	cp "$(call find-dll,System.Numerics.dll)"              $(OUT_DIR)/
+	cp "$(call find-dll,System.Runtime.Serialization.dll)" $(OUT_DIR)/
 	cp assets/ap_icon.png  $(OUT_DIR)/
 	cp assets/Models/AP.mu $(OUT_DIR)/Models/
 
