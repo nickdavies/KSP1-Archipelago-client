@@ -219,10 +219,24 @@ namespace KSPArchipelago
 
                     if (scouted.IsForSelf && scouted.IsKspPart)
                     {
-                        // Swap placeholder for the real part.
                         AvailablePart realPart = PartLoader.getPartInfoByName(scouted.ItemName);
                         if (realPart != null)
                         {
+                            // Check if this part would be tier-locked. If so, keep the
+                            // placeholder and annotate it rather than swapping in the
+                            // real part (which has no lock indication).
+                            var mod = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
+                            if (mod != null && mod.IsPartTierLocked(scouted.ItemName))
+                            {
+                                string progName = mod.GetPartProgressiveName(scouted.ItemName);
+                                int reqTier = mod.GetPartRequiredTier(scouted.ItemName);
+                                entry.Part.title = $"{realPart.title} (tier locked)";
+                                entry.Part.description = $"Requires {progName} Tier {reqTier}";
+                                updated++;
+                                continue;
+                            }
+
+                            // Not tier-locked — swap placeholder for the real part.
                             int listIdx = rdNode.tech.partsAssigned.IndexOf(entry.Part);
                             if (listIdx >= 0)
                                 rdNode.tech.partsAssigned[listIdx] = realPart;

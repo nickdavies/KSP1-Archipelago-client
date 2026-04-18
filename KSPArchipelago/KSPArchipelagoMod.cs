@@ -14,6 +14,15 @@ namespace KSPArchipelago
 {
     public static class KSPArchipelagoPartsManager
     {
+        // Tier-locked parts shown in editor as AP-icon placeholders.
+        // Key = placeholder part name, Value = real part name.
+        private static readonly Dictionary<string, string> _tierLockedParts = new Dictionary<string, string>();
+        // Reverse lookup: real part name → placeholder part name.
+        private static readonly Dictionary<string, string> _tierLockReverse = new Dictionary<string, string>();
+        // Which placeholder indices are allocated for tier-lock use.
+        private static readonly HashSet<int> _usedPlaceholderIndices = new HashSet<int>();
+        public static Dictionary<string, string> TierLockedParts => _tierLockedParts;
+
         private static readonly Dictionary<string, float> SciencePackAmounts = new Dictionary<string, float>
         {
             { "Science Pack 1",   1f },
@@ -96,7 +105,14 @@ namespace KSPArchipelago
 
                 if (mod != null && mod.IsPartTierLocked(itemName))
                 {
-                    Debug.Log($"[KSP-AP] Part '{itemName}' received but tier-locked");
+                    // Show an AP-icon placeholder in the editor instead of the
+                    // real part. EditorTierLock blocks placement attempts.
+                    string progName = mod.GetPartProgressiveName(itemName);
+                    int reqTier = mod.GetPartRequiredTier(itemName);
+                    AllocateTierLockPlaceholder(itemName, part, progName, reqTier);
+
+                    Debug.Log($"[KSP-AP] Tier-locked part '{itemName}' ({part.title}) "
+                            + $"placeholder in editor, requires {progName} Tier {reqTier}");
                     if (showToast)
                     {
                         toastText = $"AP: {part.title} (tier locked)";
@@ -140,6 +156,78 @@ namespace KSPArchipelago
             MessageSystem.Instance.AddMessage(msg);
         }
 
+        private static void AllocateTierLockPlaceholder(
+            string realPartName, AvailablePart realPart, string progName, int reqTier)
+        {
+            // Skip if already allocated (idempotent on replay).
+            if (_tierLockReverse.ContainsKey(realPartName)) return;
+
+            // Find next free placeholder index.
+            int idx = -1;
+            for (int i = 1; i <= 250; i++)
+            {
+                if (!_usedPlaceholderIndices.Contains(i))
+                {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx < 0)
+            {
+                Debug.LogWarning("[KSP-AP] Ran out of placeholders for tier-lock");
+                return;
+            }
+
+            string phName = $"ap.placeholder.{idx:D3}";
+            AvailablePart ph = PartLoader.getPartInfoByName(phName);
+            if (ph == null)
+            {
+                Debug.LogWarning($"[KSP-AP] Placeholder '{phName}' not found in PartLoader");
+                return;
+            }
+
+            ph.title = $"{realPart.title} (tier locked)";
+            ph.description = $"Requires {progName} Tier {reqTier}\n\n{realPart.description}";
+            ph.category = realPart.category;
+            ResearchAndDevelopment.AddExperimentalPart(ph);
+
+            _usedPlaceholderIndices.Add(idx);
+            _tierLockedParts[phName] = realPartName;
+            _tierLockReverse[realPartName] = phName;
+        }
+
+        private static void FreeTierLockPlaceholder(string realPartName)
+        {
+            if (!_tierLockReverse.TryGetValue(realPartName, out string phName))
+                return;
+
+            AvailablePart ph = PartLoader.getPartInfoByName(phName);
+            if (ph != null)
+            {
+                ResearchAndDevelopment.RemoveExperimentalPart(ph);
+                ph.title = "AP Item";
+                ph.description = "An Archipelago multiworld item.";
+                ph.category = PartCategories.none;
+            }
+
+            // Parse index from name to free it.
+            string suffix = phName.Substring("ap.placeholder.".Length);
+            if (int.TryParse(suffix, out int idx))
+                _usedPlaceholderIndices.Remove(idx);
+
+            _tierLockedParts.Remove(phName);
+            _tierLockReverse.Remove(realPartName);
+            Debug.Log($"[KSP-AP] Tier-lock cleared for '{realPartName}' (freed {phName})");
+        }
+
+        /// <summary>
+        /// Remove tier-lock placeholder for a part when its progressive tier arrives.
+        /// </summary>
+        public static void RestoreTierLockOverrides(string partName, AvailablePart ap)
+        {
+            FreeTierLockPlaceholder(partName);
+        }
+
         public static void ScrubTechTree()
         {
             foreach (AvailablePart part in PartLoader.LoadedPartsList)
@@ -151,6 +239,21 @@ namespace KSPArchipelago
 
         public static void ClearAllExperimentalParts()
         {
+            // Reset placeholder titles/descriptions and free indices.
+            foreach (var kvp in _tierLockedParts)
+            {
+                AvailablePart ph = PartLoader.getPartInfoByName(kvp.Key);
+                if (ph != null)
+                {
+                    ph.title = "AP Item";
+                    ph.description = "An Archipelago multiworld item.";
+                    ph.category = PartCategories.none;
+                }
+            }
+            _tierLockedParts.Clear();
+            _tierLockReverse.Clear();
+            _usedPlaceholderIndices.Clear();
+
             foreach (AvailablePart part in PartLoader.LoadedPartsList)
                 ResearchAndDevelopment.RemoveExperimentalPart(part);
         }
@@ -268,6 +371,7 @@ namespace KSPArchipelago
                 if (chosenPart != null)
                 {
                     ResearchAndDevelopment.AddExperimentalPart(chosenPart);
+                    KSPArchipelagoPartsManager.RestoreTierLockOverrides(chosen, chosenPart);
                     unlocked++;
                 }
             }
@@ -283,6 +387,7 @@ namespace KSPArchipelago
                     if (ap != null)
                     {
                         ResearchAndDevelopment.AddExperimentalPart(ap);
+                        KSPArchipelagoPartsManager.RestoreTierLockOverrides(p, ap);
                         unlocked++;
                     }
                 }
@@ -305,6 +410,16 @@ namespace KSPArchipelago
         public void TrackReceivedPart(string partName)
         {
             _receivedParts.Add(partName);
+        }
+
+        public string GetPartProgressiveName(string partName)
+        {
+            return _partProgName.TryGetValue(partName, out string name) ? name : null;
+        }
+
+        public int GetPartRequiredTier(string partName)
+        {
+            return _partProgTier.TryGetValue(partName, out int tier) ? tier : 0;
         }
 
         // Internal notification callback for UI.

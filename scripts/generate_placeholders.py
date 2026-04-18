@@ -9,7 +9,7 @@ runtime to show scouted AP items.
 import os
 import sys
 
-NUM_PLACEHOLDERS = 80
+NUM_PLACEHOLDERS = 250
 OUTPUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "assets", "ap_placeholders.cfg")
 
 TEMPLATE = """\
