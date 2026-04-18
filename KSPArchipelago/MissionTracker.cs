@@ -722,7 +722,9 @@ namespace KSPArchipelago
 
         private void OnCrewOnEva(GameEvents.FromToAction<Part, Part> action)
         {
-            Vessel v = action.to?.vessel;
+            // Use the source vessel's situation — the EVA vessel may not have its
+            // orbital state initialized yet when this event fires.
+            Vessel v = action.from?.vessel ?? action.to?.vessel;
             if (v == null) return;
             if (v.mainBody?.name == "Kerbin" && v.situation == Vessel.Situations.ORBITING)
                 ReportLocation("Kerbin EVA in Orbit", grantScience: true);
