@@ -331,6 +331,10 @@ namespace KSPArchipelago
         public int LocationsCheckedCount { get; private set; }
         public string ConnectedSlot { get; private set; }
 
+        // Goal completion: set at connect, checked each Update().
+        private bool _goalSent = false;
+        private string _goalDisplayName;
+
         public void IncrementRDLevel()
         {
             RDLevel++;
@@ -471,6 +475,31 @@ namespace KSPArchipelago
             }
 
             missionTracker?.Update();
+
+            if (!_goalSent && session != null && missionTracker != null && missionTracker.IsGoalMet())
+            {
+                _goalSent = true;
+                session.SetGoalAchieved();
+                NotifyVictory();
+            }
+        }
+
+        private void NotifyVictory()
+        {
+            string toast = $"AP: VICTORY! {_goalDisplayName} Complete!";
+            ScreenMessages.PostScreenMessage(toast, 15f, ScreenMessageStyle.UPPER_CENTER);
+            Debug.Log($"[KSP-AP] {toast}");
+
+            if (MessageSystem.Instance != null)
+            {
+                var msg = new MessageSystem.Message(
+                    toast,
+                    $"You have completed the {_goalDisplayName} goal.\n"
+                    + "Your victory has been sent to the Archipelago server.",
+                    MessageSystemButton.MessageButtonColor.GREEN,
+                    MessageSystemButton.ButtonIcons.MESSAGE);
+                MessageSystem.Instance.AddMessage(msg);
+            }
         }
 
         /// <summary>
@@ -634,6 +663,19 @@ namespace KSPArchipelago
                 if (ApScenarioModule.Instance != null)
                     missionTracker.SetPendingNames(ApScenarioModule.Instance.PendingLocationNames);
                 missionTracker.OnConnect(session, Difficulty, TechSlotsPerNode, () => LocationsCheckedCount++);
+
+                // Parse goal location sentinels from slot data.
+                var goalLocNames = new List<string>();
+                if (loginData.SlotData.TryGetValue("goal_locations", out object glObj)
+                    && glObj is JArray glArr)
+                {
+                    foreach (var tok in glArr)
+                        goalLocNames.Add((string)tok);
+                }
+                missionTracker.SetGoalLocations(goalLocNames);
+                _goalDisplayName = loginData.SlotData.TryGetValue("goal_display_name", out object gdObj)
+                    ? (string)gdObj : "Unknown Goal";
+                _goalSent = false;
 
                 // Restore UI counters from session/tracker state.
                 ItemsReceivedCount = newSession.Items.AllItemsReceived.Count;

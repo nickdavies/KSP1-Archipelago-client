@@ -154,6 +154,10 @@ namespace KSPArchipelago
         // Not persisted; onOrbit re-fires on scene load for orbiting vessels.
         private readonly HashSet<uint> _vesselsOrbitedKerbin = new HashSet<uint>();
 
+        // Goal detection: cached location IDs whose checks indicate victory.
+        // Set via SetGoalLocations() from slot_data; polled by IsGoalMet().
+        private List<long> _goalLocationIds;
+
         // ------------------------------------------------------------------
         // Lifecycle
         // ------------------------------------------------------------------
@@ -221,6 +225,39 @@ namespace KSPArchipelago
         public void SetPendingNames(HashSet<string> names)
         {
             pendingLocationNames = names ?? new HashSet<string>();
+        }
+
+        /// <summary>
+        /// Cache goal-relevant location IDs from server-provided names.
+        /// Call after session is available (needs LookupId).
+        /// </summary>
+        public void SetGoalLocations(List<string> locationNames)
+        {
+            _goalLocationIds = new List<long>(locationNames.Count);
+            foreach (string name in locationNames)
+            {
+                long id = LookupId(name);
+                if (id >= 0)
+                    _goalLocationIds.Add(id);
+                else
+                    Debug.LogWarning($"[KSP-AP] Goal location not found: '{name}'");
+            }
+            Debug.Log($"[KSP-AP] Cached {_goalLocationIds.Count} goal location IDs");
+        }
+
+        /// <summary>
+        /// Returns true if all goal-sentinel locations have been checked.
+        /// </summary>
+        public bool IsGoalMet()
+        {
+            if (_goalLocationIds == null || _goalLocationIds.Count == 0
+                || checkedLocationIds == null)
+                return false;
+            foreach (long id in _goalLocationIds)
+            {
+                if (!checkedLocationIds.Contains(id)) return false;
+            }
+            return true;
         }
 
         /// <summary>Call from MonoBehaviour.Update() for altitude polling.</summary>
