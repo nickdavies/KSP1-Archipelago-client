@@ -133,6 +133,16 @@ namespace KSPArchipelago
 
         private const float MissionScienceBonus = 5f;
 
+        /// True for player-created vessels (ships, probes, EVA kerbals, etc.).
+        /// False for asteroids, debris, and flags.
+        private static bool IsMissionVessel(Vessel v)
+        {
+            if (v == null) return false;
+            return v.vesselType != VesselType.SpaceObject &&
+                   v.vesselType != VesselType.Flag &&
+                   v.vesselType != VesselType.Debris;
+        }
+
         private ArchipelagoSession session;
         private HashSet<long> checkedLocationIds;
         private bool initialized = false;
@@ -288,6 +298,8 @@ namespace KSPArchipelago
 
             GameEvents.onVesselSituationChange.Add(
                 new EventData<GameEvents.HostedFromToAction<Vessel, Vessel.Situations>>.OnEvent(OnSituationChange));
+            GameEvents.onVesselSOIChanged.Add(
+                new EventData<GameEvents.HostedFromToAction<Vessel, CelestialBody>>.OnEvent(OnVesselSOIChanged));
             GameEvents.onFlagPlant.Add(
                 new EventData<Vessel>.OnEvent(OnFlagPlant));
             GameEvents.onStageSeparation.Add(
@@ -325,6 +337,8 @@ namespace KSPArchipelago
 
             GameEvents.onVesselSituationChange.Remove(
                 new EventData<GameEvents.HostedFromToAction<Vessel, Vessel.Situations>>.OnEvent(OnSituationChange));
+            GameEvents.onVesselSOIChanged.Remove(
+                new EventData<GameEvents.HostedFromToAction<Vessel, CelestialBody>>.OnEvent(OnVesselSOIChanged));
             GameEvents.onFlagPlant.Remove(
                 new EventData<Vessel>.OnEvent(OnFlagPlant));
             GameEvents.onStageSeparation.Remove(
@@ -597,11 +611,25 @@ namespace KSPArchipelago
 
         private void OnFlyBy(Vessel vessel, CelestialBody body)
         {
+            if (!IsMissionVessel(vessel)) return;
             ReportBodyEvent(body.name, "Flyby");
+        }
+
+        private void OnVesselSOIChanged(GameEvents.HostedFromToAction<Vessel, CelestialBody> data)
+        {
+            // Report flyby when entering a body's SOI from its parent SOI.
+            // onFlyBy only fires for "new" SOIs, so it misses Kerbin (home body).
+            // This catches that case and acts as belt-and-suspenders for all bodies.
+            // Leaving a moon back to its planet is filtered out because
+            // data.from (the moon) != data.to.referenceBody (the planet's parent).
+            if (!IsMissionVessel(data.host)) return;
+            if (data.to != null && data.from == data.to.referenceBody)
+                ReportBodyEvent(data.to.name, "Flyby");
         }
 
         private void OnOrbit(Vessel vessel, CelestialBody body)
         {
+            if (!IsMissionVessel(vessel)) return;
             ReportBodyEvent(body.name, "Orbit");
             if (body.name == "Kerbin")
                 _vesselsOrbitedKerbin.Add(vessel.persistentId);
@@ -609,6 +637,7 @@ namespace KSPArchipelago
 
         private void OnEscape(Vessel vessel, CelestialBody body)
         {
+            if (!IsMissionVessel(vessel)) return;
             // Entering a moon's SOI (e.g. Duna→Ike) fires onEscape for the parent.
             // Only report SOI Leave for a true system escape, not moon encounters.
             CelestialBody newBody = vessel.mainBody;
@@ -620,14 +649,9 @@ namespace KSPArchipelago
 
         private void OnLand(Vessel vessel, CelestialBody body)
         {
+            if (!IsMissionVessel(vessel)) return;
             if (body.name == "Kerbin")
             {
-                // Skip non-craft vessels (flags, debris, EVA kerbals)
-                if (vessel.vesselType == VesselType.Flag ||
-                    vessel.vesselType == VesselType.Debris ||
-                    vessel.isEVA)
-                    return;
-
                 // Kerbin Return requires the vessel to have achieved Kerbin orbit.
                 // Sub-orbital hops don't qualify.
                 if (_vesselsOrbitedKerbin.Contains(vessel.persistentId))
@@ -646,16 +670,17 @@ namespace KSPArchipelago
         private void OnSituationChange(GameEvents.HostedFromToAction<Vessel, Vessel.Situations> data)
         {
             Vessel v = data.host;
-            if (v == null) return;
-            string body = v?.mainBody?.name;
+            if (!IsMissionVessel(v)) return;
+            string body = v.mainBody?.name;
 
-            // Kerbin Splashdown — skip EVA vessels (onLand does not fire for SPLASHED)
-            if (data.to == Vessel.Situations.SPLASHED && body == "Kerbin" && !v.isEVA)
+            // Kerbin Splashdown (onLand does not fire for SPLASHED)
+            if (data.to == Vessel.Situations.SPLASHED && body == "Kerbin")
                 ReportLocation("Kerbin Splashdown", grantScience: true);
 
-            // First Launch: PRELAUNCH → FLYING or SUB_ORBITAL on Kerbin
+            // First Launch: any transition to FLYING or SUB_ORBITAL on Kerbin.
+            // Don't check data.from — KSP can insert PRELAUNCH→LANDED→FLYING
+            // when physics settles the vessel on the pad before launch.
             if (body == "Kerbin"
-                && data.from == Vessel.Situations.PRELAUNCH
                 && (data.to == Vessel.Situations.FLYING || data.to == Vessel.Situations.SUB_ORBITAL)
                 && !checkedLocationIds.Contains(kerbinFirstLaunchId))
             {
@@ -684,6 +709,7 @@ namespace KSPArchipelago
         // The body parameter is the remote body (e.g. Mun), not Kerbin.
         private void OnReturnFromOrbit(Vessel vessel, CelestialBody body)
         {
+            if (!IsMissionVessel(vessel)) return;
             ReportBodyEvent(body.name, "Return");
             // Also count as a Kerbin landing (deorbit + recovery)
             ReportBodyEvent("Kerbin", "Landing");
@@ -694,6 +720,7 @@ namespace KSPArchipelago
         // onReturnFromSurface fires when a vessel lands on Kerbin after having landed on another body.
         private void OnReturnFromSurface(Vessel vessel, CelestialBody body)
         {
+            if (!IsMissionVessel(vessel)) return;
             ReportBodyEvent(body.name, "Return");
             foreach (string sampleBody in CollectSurfaceSampleBodies(vessel))
                 ReportBodyEvent(sampleBody, "Sample Return");
@@ -716,7 +743,8 @@ namespace KSPArchipelago
         private void OnCrash(EventReport report)
         {
             if (checkedLocationIds.Contains(kerbinFirstCrashId)) return;
-            if (report.origin?.vessel?.mainBody?.name != "Kerbin") return;
+            if (!IsMissionVessel(report.origin?.vessel)) return;
+            if (report.origin.vessel.mainBody?.name != "Kerbin") return;
             ReportLocation("Kerbin First Crash", grantScience: true);
         }
 
