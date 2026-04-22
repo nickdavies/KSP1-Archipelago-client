@@ -352,6 +352,11 @@ namespace KSPArchipelago
                     if (entry.PlaceholderIndex >= 0)
                         inUseBy[entry.PlaceholderIndex] = kvp.Key;
                 }
+
+                // KSP resets scienceCost from configs on each R&D rebuild.
+                // Re-apply the override for band-locked nodes.
+                if (originalCosts.ContainsKey(kvp.Key))
+                    rdNode.tech.scienceCost = int.MaxValue;
             }
 
             // Clean up entries for nodes that have been researched since last open.
