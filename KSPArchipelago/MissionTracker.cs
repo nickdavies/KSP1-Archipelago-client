@@ -167,6 +167,8 @@ namespace KSPArchipelago
         // Goal detection: cached location IDs whose checks indicate victory.
         // Set via SetGoalLocations() from slot_data; polled by IsGoalMet().
         private List<long> _goalLocationIds;
+        // Per-goal-location display names, parallel to _goalLocationIds.
+        private List<string> _goalDisplayNames;
 
         // ------------------------------------------------------------------
         // Lifecycle
@@ -244,15 +246,50 @@ namespace KSPArchipelago
         public void SetGoalLocations(List<string> locationNames)
         {
             _goalLocationIds = new List<long>(locationNames.Count);
+            _goalDisplayNames = new List<string>(locationNames.Count);
             foreach (string name in locationNames)
             {
                 long id = LookupId(name);
                 if (id >= 0)
+                {
                     _goalLocationIds.Add(id);
+                    // Strip trailing " 1" — all sentinels are slot-1 locations.
+                    string display = name.EndsWith(" 1") ? name.Substring(0, name.Length - 2) : name;
+                    _goalDisplayNames.Add(display);
+                }
                 else
                     Debug.LogWarning($"[KSP-AP] Goal location not found: '{name}'");
             }
             Debug.Log($"[KSP-AP] Cached {_goalLocationIds.Count} goal location IDs");
+        }
+
+        /// <summary>
+        /// Returns per-location goal progress: key = display name, value = is checked.
+        /// </summary>
+        public List<KeyValuePair<string, bool>> GetGoalStatus()
+        {
+            var result = new List<KeyValuePair<string, bool>>();
+            if (_goalLocationIds == null || checkedLocationIds == null) return result;
+            for (int i = 0; i < _goalLocationIds.Count; i++)
+            {
+                bool done = checkedLocationIds.Contains(_goalLocationIds[i]);
+                result.Add(new KeyValuePair<string, bool>(_goalDisplayNames[i], done));
+            }
+            return result;
+        }
+
+        public int GoalLocationCount => _goalLocationIds?.Count ?? 0;
+
+        public int GoalLocationsChecked
+        {
+            get
+            {
+                if (_goalLocationIds == null || checkedLocationIds == null) return 0;
+                int count = 0;
+                foreach (long id in _goalLocationIds)
+                    if (checkedLocationIds.Contains(id)) count++;
+                return count;
+            }
         }
 
         /// <summary>

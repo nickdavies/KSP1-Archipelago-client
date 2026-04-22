@@ -335,6 +335,12 @@ namespace KSPArchipelago
         private bool _goalSent = false;
         private string _goalDisplayName;
 
+        public string GoalDisplayName => _goalDisplayName;
+        public int GoalLocationCount => missionTracker?.GoalLocationCount ?? 0;
+        public int GoalLocationsChecked => missionTracker?.GoalLocationsChecked ?? 0;
+        public List<KeyValuePair<string, bool>> GetGoalStatus()
+            => missionTracker?.GetGoalStatus() ?? new List<KeyValuePair<string, bool>>();
+
         public void IncrementRDLevel()
         {
             RDLevel++;

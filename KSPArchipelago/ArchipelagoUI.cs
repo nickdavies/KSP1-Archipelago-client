@@ -20,7 +20,8 @@ namespace KSPArchipelago
         // Panel state.
         private bool showPanel = false;
         private bool wasConnected = false;
-        private Rect windowRect = new Rect(Screen.width / 2 - 200, Screen.height / 2 - 150, 400, 300);
+        // Height 0 lets GUILayout.Window auto-size to fit content.
+        private Rect windowRect = new Rect(Screen.width / 2 - 200, Screen.height / 2 - 150, 400, 0);
 
         // Connection form fields.
         private string host = "localhost";
@@ -136,12 +137,45 @@ namespace KSPArchipelago
             GUI.DragWindow();
         }
 
+        private Vector2 goalScrollPos;
+
         private void DrawConnectedPanel()
         {
             GUILayout.Space(4);
             GUILayout.Label($"Status: Connected ({mod.ConnectedSlot})");
             GUILayout.Label($"Items received:      {mod.ItemsReceivedCount}");
             GUILayout.Label($"Locations checked:   {mod.LocationsCheckedCount}");
+
+            // Goal progress checklist
+            int goalTotal = mod.GoalLocationCount;
+            if (goalTotal > 0)
+            {
+                int goalDone = mod.GoalLocationsChecked;
+                string goalName = mod.GoalDisplayName ?? "Unknown";
+                GUILayout.Space(4);
+                GUILayout.Label($"Goal: {goalName} ({goalDone}/{goalTotal})");
+
+                var status = mod.GetGoalStatus();
+                if (goalTotal <= 15)
+                {
+                    foreach (var entry in status)
+                    {
+                        string mark = entry.Value ? "\u2713" : "\u25CB";
+                        GUILayout.Label($"  {mark} {entry.Key}");
+                    }
+                }
+                else
+                {
+                    goalScrollPos = GUILayout.BeginScrollView(goalScrollPos, GUILayout.MaxHeight(400));
+                    foreach (var entry in status)
+                    {
+                        string mark = entry.Value ? "\u2713" : "\u25CB";
+                        GUILayout.Label($"  {mark} {entry.Key}");
+                    }
+                    GUILayout.EndScrollView();
+                }
+            }
+
             GUILayout.Space(8);
             if (GUILayout.Button("Re-award All Items"))
             {
