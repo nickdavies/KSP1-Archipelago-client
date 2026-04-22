@@ -45,7 +45,7 @@ namespace KSPArchipelago
             {"Runway",           "KSC Runway"},
             {"Administration",   "KSC Administration"},
             {"AstronautComplex", "KSC Astronaut Complex"},
-            {"FlagPole",         "KSC Flag Pole"},
+            {"FlagPole",         "KSC Flag Pole (Astronaut Complex)"},
             {"SPH",              "KSC SPH"},
             {"VAB",              "KSC VAB"},
             {"TrackingStation",  "KSC Tracking Station"},
