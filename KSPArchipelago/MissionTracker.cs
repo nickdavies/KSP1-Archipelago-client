@@ -777,11 +777,16 @@ namespace KSPArchipelago
 
         // onCrash / onCrashSplashdown fire per-part on impact destruction.
         // We only care about the first crash ever on Kerbin.
+        // Use ActiveVessel (like OnStageSeparation) because KSP reclassifies
+        // parts as Debris before firing crash events, breaking IsMissionVessel.
+        // ActiveVessel is the craft the player is flying, so detached boosters
+        // that crash separately won't trigger this.
         private void OnCrash(EventReport report)
         {
             if (checkedLocationIds.Contains(kerbinFirstCrashId)) return;
-            if (!IsMissionVessel(report.origin?.vessel)) return;
-            if (report.origin.vessel.mainBody?.name != "Kerbin") return;
+            Vessel v = FlightGlobals.ActiveVessel;
+            if (v == null || !IsMissionVessel(v)) return;
+            if (v.mainBody?.name != "Kerbin") return;
             ReportLocation("Kerbin First Crash", grantScience: true);
         }
 
