@@ -786,8 +786,8 @@ namespace KSPArchipelago
             // orbital state initialized yet when this event fires.
             Vessel v = action.from?.vessel ?? action.to?.vessel;
             if (v == null) return;
-            if (v.mainBody?.name == "Kerbin" && v.situation == Vessel.Situations.ORBITING)
-                ReportLocation("Kerbin EVA in Orbit", grantScience: true);
+            if (v.situation == Vessel.Situations.ORBITING && v.mainBody != null)
+                ReportBodyEvent(v.mainBody.name, "EVA in Orbit");
         }
 
         private void OnTechResearched(GameEvents.HostTargetAction<RDTech, RDTech.OperationResult> action)
