@@ -130,10 +130,21 @@ namespace Archipelago
             }
         }
 
-        private void Disconnect()
+        /// <summary>
+        /// Full disconnect: close socket, clear reconnect state, notify mod.
+        /// Called by /disconnect command and by the mod on scene change to main menu.
+        /// </summary>
+        public void Disconnect()
         {
             reconnecting = false;
+            lastHost = null;
+            var s = currentSession;
             currentSession = null;
+            if (s?.Socket != null && s.Socket.Connected)
+            {
+                s.Socket.SocketClosed -= OnSocketClosed;
+                s.Socket.DisconnectAsync();
+            }
             mod.HandleDisconnect();
             Log("[KSP-AP] Disconnected.");
         }

@@ -764,7 +764,7 @@ namespace KSPArchipelago
             if (scene == GameScenes.MAINMENU && IsConnected)
             {
                 Debug.Log("[KSP-AP] Returning to main menu — disconnecting.");
-                HandleDisconnect();
+                Console.Disconnect();
             }
         }
 
