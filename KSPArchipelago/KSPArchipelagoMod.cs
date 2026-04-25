@@ -23,16 +23,26 @@ namespace KSPArchipelago
         private static readonly HashSet<int> _usedPlaceholderIndices = new HashSet<int>();
         public static Dictionary<string, string> TierLockedParts => _tierLockedParts;
 
-        private static readonly Dictionary<string, float> SciencePackAmounts = new Dictionary<string, float>
+        // Populated from slot_data at connect time.
+        private static Dictionary<string, float> SciencePackAmounts = new Dictionary<string, float>();
+
+        /// <summary>
+        /// Parse science pack definitions from slot_data. Returns true on success.
+        /// </summary>
+        public static bool SetSciencePacksFromSlotData(Dictionary<string, object> slotData)
         {
-            { "Science Pack 1",   1f },
-            { "Science Pack 5",   5f },
-            { "Science Pack 10",  10f },
-            { "Science Pack 25",  25f },
-            { "Science Pack 50",  50f },
-            { "Science Pack 100", 100f },
-            { "Science Pack 250", 250f },
-        };
+            if (slotData == null) return false;
+            if (slotData.TryGetValue("science_packs", out object spObj)
+                && spObj is JObject spDict)
+            {
+                SciencePackAmounts = new Dictionary<string, float>();
+                foreach (var kvp in spDict)
+                    SciencePackAmounts[kvp.Key] = (float)(int)kvp.Value;
+                Debug.Log($"[KSP-AP] Parsed {SciencePackAmounts.Count} science packs from slot data");
+                return true;
+            }
+            return false;
+        }
 
         /// <summary>
         /// Single path for all item processing. State mutations (progressive counts,
@@ -463,6 +473,14 @@ namespace KSPArchipelago
 
         private void Update()
         {
+            if (_slotDataError != null)
+            {
+                string msg = $"AP: Disconnected — {_slotDataError}";
+                ScreenMessages.PostScreenMessage(msg, 10f, ScreenMessageStyle.UPPER_CENTER);
+                Debug.LogError($"[KSP-AP] {msg}");
+                _slotDataError = null;
+            }
+
             if (_needsReset)
             {
                 _needsReset = false;
@@ -584,35 +602,40 @@ namespace KSPArchipelago
             _lastProcessedIndex = count;
         }
 
+        // Deferred error: set on background thread, shown by Update() on main thread.
+        private volatile string _slotDataError = null;
+
         public void HandleConnect(ArchipelagoSession newSession, LoginSuccessful loginData, string slotName)
         {
             Debug.Log("[KSP-AP] Connected to AP server.");
             lock (sessionLock)
             {
                 session = newSession;
+                var sd = loginData.SlotData;
 
-                // Parse slot data.
-                Goal = loginData.SlotData.TryGetValue("goal", out object goalObj)
-                    ? Convert.ToInt32(goalObj) : 0;
-                Difficulty = loginData.SlotData.TryGetValue("difficulty", out object diffObj)
-                    ? Convert.ToInt32(diffObj) : 1;
-                TechSlotsPerNode = loginData.SlotData.TryGetValue("tech_slots_per_node", out object tsObj)
-                    ? Convert.ToInt32(tsObj) : 4;
-                ConnectedSlot = slotName;
+                // --- Validate required slot_data keys up front ---
+                var missing = new List<string>();
 
-                // Parse node_bands from slot data.
+                Goal = sd.TryGetValue("goal", out object goalObj) ? Convert.ToInt32(goalObj) : 0;
+                Difficulty = sd.TryGetValue("difficulty", out object diffObj) ? Convert.ToInt32(diffObj) : -1;
+                if (Difficulty < 0) missing.Add("difficulty");
+                TechSlotsPerNode = sd.TryGetValue("tech_slots_per_node", out object tsObj)
+                    ? Convert.ToInt32(tsObj) : -1;
+                if (TechSlotsPerNode < 0) missing.Add("tech_slots_per_node");
+
+                if (!KSPArchipelagoPartsManager.SetSciencePacksFromSlotData(sd))
+                    missing.Add("science_packs");
+
                 NodeBands = new Dictionary<string, int>();
-                if (loginData.SlotData.TryGetValue("node_bands", out object bandsObj)
-                    && bandsObj is JObject bandsDict)
+                if (sd.TryGetValue("node_bands", out object bandsObj) && bandsObj is JObject bandsDict)
                 {
                     foreach (var kvp in bandsDict)
                         NodeBands[kvp.Key] = (int)kvp.Value;
                 }
+                else missing.Add("node_bands");
 
-                // Parse progressive_tiers from slot data.
                 ProgressiveTiers = new Dictionary<string, Dictionary<int, List<string>>>();
-                if (loginData.SlotData.TryGetValue("progressive_tiers", out object ptObj)
-                    && ptObj is JObject ptDict)
+                if (sd.TryGetValue("progressive_tiers", out object ptObj) && ptObj is JObject ptDict)
                 {
                     foreach (var prog in ptDict)
                     {
@@ -624,13 +647,11 @@ namespace KSPArchipelago
                         }
                         ProgressiveTiers[prog.Key] = tierMap;
                     }
-                    Debug.Log($"[KSP-AP] Parsed {ProgressiveTiers.Count} progressive tier categories from slot data");
                 }
+                else missing.Add("progressive_tiers");
 
-                // Parse progressive_representatives from slot data.
                 ProgressiveRepresentatives = new Dictionary<string, Dictionary<int, string>>();
-                if (loginData.SlotData.TryGetValue("progressive_representatives", out object prObj)
-                    && prObj is JObject prDict)
+                if (sd.TryGetValue("progressive_representatives", out object prObj) && prObj is JObject prDict)
                 {
                     foreach (var prog in prDict)
                     {
@@ -642,8 +663,20 @@ namespace KSPArchipelago
                         }
                         ProgressiveRepresentatives[prog.Key] = repMap;
                     }
-                    Debug.Log($"[KSP-AP] Parsed {ProgressiveRepresentatives.Count} progressive representative categories from slot data");
                 }
+                else missing.Add("progressive_representatives");
+
+                if (missing.Count > 0)
+                {
+                    string error = "Server slot_data missing required keys: " + string.Join(", ", missing);
+                    Debug.LogError($"[KSP-AP] {error}");
+                    _slotDataError = error;
+                    session = null;
+                    ConnectedSlot = null;
+                    return;
+                }
+
+                ConnectedSlot = slotName;
 
                 // Build reverse lookup: part cfg_name → progressive name + tier.
                 _partProgName = new Dictionary<string, string>();
@@ -668,18 +701,27 @@ namespace KSPArchipelago
                 // sees offline-queued locations when KSP saves.
                 if (ApScenarioModule.Instance != null)
                     missionTracker.SetPendingNames(ApScenarioModule.Instance.PendingLocationNames);
-                missionTracker.OnConnect(session, Difficulty, TechSlotsPerNode, () => LocationsCheckedCount++);
+
+                string trackerError = missionTracker.OnConnect(session, Difficulty, TechSlotsPerNode,
+                    () => LocationsCheckedCount++, sd);
+                if (trackerError != null)
+                {
+                    Debug.LogError($"[KSP-AP] {trackerError}");
+                    _slotDataError = trackerError;
+                    session = null;
+                    ConnectedSlot = null;
+                    return;
+                }
 
                 // Parse goal location sentinels from slot data.
                 var goalLocNames = new List<string>();
-                if (loginData.SlotData.TryGetValue("goal_locations", out object glObj)
-                    && glObj is JArray glArr)
+                if (sd.TryGetValue("goal_locations", out object glObj) && glObj is JArray glArr)
                 {
                     foreach (var tok in glArr)
                         goalLocNames.Add((string)tok);
                 }
                 missionTracker.SetGoalLocations(goalLocNames);
-                _goalDisplayName = loginData.SlotData.TryGetValue("goal_display_name", out object gdObj)
+                _goalDisplayName = sd.TryGetValue("goal_display_name", out object gdObj)
                     ? (string)gdObj : "Unknown Goal";
                 _goalSent = false;
 

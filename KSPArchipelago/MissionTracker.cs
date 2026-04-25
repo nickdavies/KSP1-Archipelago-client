@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 using Archipelago.MultiClient.Net;
 
@@ -17,28 +18,14 @@ namespace KSPArchipelago
         /// Number of locations already checked (from AP server).
         public int CheckedCount => checkedLocationIds?.Count ?? 0;
 
-        // Kerbin altitude check thresholds in metres (location names use km).
-        private static readonly int[] KerbinAltThresholds = { 5000, 15000, 25000, 35000, 45000, 55000, 70000 };
+        // Populated from slot_data at connect time.
+        private int[] kerbinAltThresholds = new int[0];
+        private Dictionary<string, int> eventScale = new Dictionary<string, int>();
+        private int startingInvCount = 0;
 
-        // Number of AP location slots per event type (must match EVENT_SCALE in locations.py).
-        private static readonly Dictionary<string, int> EventScale = new Dictionary<string, int>
-        {
-            { "Flyby", 1 }, { "SOI Leave", 1 }, { "Orbit", 1 },
-            { "Landing", 2 }, { "Crewed Landing", 2 }, { "Flag Plant", 2 },
-            { "Return", 3 }, { "Sample Return", 3 },
-        };
-
-        // Number of Starting Inventory locations by difficulty value.
-        private static readonly Dictionary<int, int> DifficultyStartingCount = new Dictionary<int, int>
-        {
-            { 0, 20 }, // casual
-            { 1, 15 }, // normal
-            { 2, 10 }, // expert
-            { 3,  5 }, // insane
-        };
-
-        // KSC biome strings as they appear after "KerbinSrfLanded" in ScienceSubject.id
-        // → AP location name to report.
+        // KSC biome strings (KSP game-internal) → AP location name.
+        // Keys come from the game, so they must stay here.  Values are validated
+        // against slot_data at connect time.
         private static readonly Dictionary<string, string> KscBiomeToLocation = new Dictionary<string, string>
         {
             {"LaunchPad",        "KSC LaunchPad"},
@@ -55,81 +42,9 @@ namespace KSPArchipelago
             {"KSC",              "KSC Grounds"},
         };
 
-        // Tech tree node_id → display_name  (from data/tech_tree.json — must stay in sync).
-        // 62 purchasable stock nodes across tiers 1-8.
-        internal static readonly Dictionary<string, string> TechDisplayNames = new Dictionary<string, string>
-        {
-            // Tier 1
-            { "basicRocketry",                   "Basic Rocketry" },
-            { "engineering101",                  "Engineering 101" },
-            // Tier 2
-            { "generalRocketry",                 "General Rocketry" },
-            { "stability",                       "Stability" },
-            { "survivability",                   "Survivability" },
-            // Tier 3
-            { "advRocketry",                     "Advanced Rocketry" },
-            { "aviation",                        "Aviation" },
-            { "basicScience",                    "Basic Science" },
-            { "flightControl",                   "Flight Control" },
-            { "generalConstruction",             "General Construction" },
-            // Tier 4
-            { "advConstruction",                 "Advanced Construction" },
-            { "advFlightControl",                "Advanced Flight Control" },
-            { "aerodynamicSystems",              "Aerodynamics" },
-            { "electrics",                       "Electrics" },
-            { "fuelSystems",                     "Fuel Systems" },
-            { "heavyRocketry",                   "Heavy Rocketry" },
-            { "landing",                         "Landing" },
-            { "miniaturization",                 "Miniaturization" },
-            { "propulsionSystems",               "Propulsion Systems" },
-            { "spaceExploration",                "Space Exploration" },
-            // Tier 5
-            { "actuators",                       "Actuators" },
-            { "advAerodynamics",                 "Advanced Aerodynamics" },
-            { "advElectrics",                    "Advanced Electrics" },
-            { "advExploration",                  "Advanced Exploration" },
-            { "advFuelSystems",                  "Adv. Fuel Systems" },
-            { "advLanding",                      "Advanced Landing" },
-            { "commandModules",                  "Command Modules" },
-            { "heavierRocketry",                 "Heavier Rocketry" },
-            { "precisionEngineering",            "Precision Engineering" },
-            { "precisionPropulsion",             "Precision Propulsion" },
-            { "specializedConstruction",         "Specialized Construction" },
-            { "specializedControl",              "Specialized Control" },
-            { "supersonicFlight",                "Supersonic Flight" },
-            // Tier 6
-            { "advMetalworks",                   "Advanced MetalWorks" },
-            { "composites",                      "Composites" },
-            { "electronics",                     "Electronics" },
-            { "fieldScience",                    "Field Science" },
-            { "heavyAerodynamics",               "Heavy Aerodynamics" },
-            { "heavyLanding",                    "Heavy Landing" },
-            { "highAltitudeFlight",              "High Altitude Flight" },
-            { "largeElectrics",                  "High-Power Electrics" },
-            { "largeVolumeContainment",          "Large Volume Containment" },
-            { "nuclearPropulsion",               "Nuclear Propulsion" },
-            { "scienceTech",                     "Scanning Tech" },
-            { "unmannedTech",                    "Unmanned Tech" },
-            // Tier 7
-            { "advScienceTech",                  "Advanced Science Tech" },
-            { "advUnmanned",                     "Advanced Unmanned Tech" },
-            { "advancedMotors",                  "Advanced Motors" },
-            { "automation",                      "Automation" },
-            { "experimentalAerodynamics",        "Experimental Aerodynamics" },
-            { "highPerformanceFuelSystems",      "High-Performance Fuel Systems" },
-            { "hypersonicFlight",                "Hypersonic Flight" },
-            { "ionPropulsion",                   "Ion Propulsion" },
-            { "metaMaterials",                   "Meta-Materials" },
-            { "nanolathing",                     "Nanolathing" },
-            { "specializedElectrics",            "Specialized Electrics" },
-            { "veryHeavyRocketry",               "Very Heavy Rocketry" },
-            // Tier 8
-            { "aerospaceTech",                   "Aerospace Tech" },
-            { "experimentalElectrics",           "Experimental Electrics" },
-            { "experimentalMotors",              "Experimental Motors" },
-            { "experimentalScience",             "Experimental Science" },
-            { "largeUnmanned",                   "Large Probes" },
-        };
+        // Tech tree node_id → display_name.  Populated from slot_data at connect time.
+        // Static because TechTreeScout and PlaceholderManager access it.
+        internal static Dictionary<string, string> TechDisplayNames = new Dictionary<string, string>();
 
         private const float MissionScienceBonus = 5f;
 
@@ -178,12 +93,18 @@ namespace KSPArchipelago
         /// Call after a successful AP connection. Populates checked-location state
         /// from the server, registers events on first call, flushes any offline
         /// queued checks, and reports Starting Inventory.
+        /// Returns null on success, or an error message if slot_data is invalid.
         /// </summary>
-        public void OnConnect(ArchipelagoSession newSession, int difficulty, int techSlots = 4, Action onLocationReported = null)
+        public string OnConnect(ArchipelagoSession newSession, int difficulty, int techSlots = 4,
+                                Action onLocationReported = null,
+                                Dictionary<string, object> slotData = null)
         {
             session = newSession;
             this.onLocationReported = onLocationReported;
             techSlotsPerNode = techSlots;
+
+            string error = ParseSlotData(slotData);
+            if (error != null) return error;
 
             checkedLocationIds = new HashSet<long>(session.Locations.AllLocationsChecked);
             Debug.Log($"[KSP-AP] Loaded {checkedLocationIds.Count} checked locations from server.");
@@ -194,7 +115,7 @@ namespace KSPArchipelago
             kerbinFirstLandingId = LookupId("Kerbin First Landing");
             kerbinFirstCrashId = LookupId("Kerbin First Crash");
             altitudeIds = new Dictionary<int, long>();
-            foreach (int t in KerbinAltThresholds)
+            foreach (int t in kerbinAltThresholds)
                 altitudeIds[t] = LookupId($"Kerbin {t / 1000}km Altitude");
 
             if (!eventsRegistered)
@@ -204,8 +125,78 @@ namespace KSPArchipelago
             }
 
             FlushPending();
-            ReportStartingInventory(difficulty);
+            ReportStartingInventory();
             initialized = true;
+            return null;
+        }
+
+        /// <summary>
+        /// Parse and validate all required slot_data keys.
+        /// Returns null on success, or an error message describing what's missing.
+        /// </summary>
+        private string ParseSlotData(Dictionary<string, object> slotData)
+        {
+            if (slotData == null)
+                return "Server sent no slot_data";
+
+            var missing = new List<string>();
+
+            // Event scales
+            if (slotData.TryGetValue("event_scales", out object esObj)
+                && esObj is JObject esDict)
+            {
+                eventScale = new Dictionary<string, int>();
+                foreach (var kvp in esDict)
+                    eventScale[kvp.Key] = (int)kvp.Value;
+            }
+            else missing.Add("event_scales");
+
+            // Tech display names
+            if (slotData.TryGetValue("tech_display_names", out object tdObj)
+                && tdObj is JObject tdDict)
+            {
+                TechDisplayNames = new Dictionary<string, string>();
+                foreach (var kvp in tdDict)
+                    TechDisplayNames[kvp.Key] = (string)kvp.Value;
+            }
+            else missing.Add("tech_display_names");
+
+            // Kerbin altitude thresholds
+            if (slotData.TryGetValue("kerbin_altitude_thresholds", out object katObj)
+                && katObj is JArray katArr)
+            {
+                kerbinAltThresholds = katArr.ToObject<int[]>();
+            }
+            else missing.Add("kerbin_altitude_thresholds");
+
+            // Starting inventory count
+            if (slotData.TryGetValue("starting_inv_count", out object sicObj))
+                startingInvCount = Convert.ToInt32(sicObj);
+            else
+                missing.Add("starting_inv_count");
+
+            // KSC biome names: validate that our hardcoded mapping covers the server's list.
+            if (slotData.TryGetValue("ksc_biome_names", out object kbnObj)
+                && kbnObj is JArray kbnArr)
+            {
+                var serverNames = new HashSet<string>();
+                foreach (var tok in kbnArr)
+                    serverNames.Add((string)tok);
+                foreach (var kvp in KscBiomeToLocation)
+                {
+                    if (!serverNames.Contains(kvp.Value))
+                        return $"KSC biome mismatch: client has '{kvp.Value}' but server doesn't";
+                }
+            }
+            else missing.Add("ksc_biome_names");
+
+            if (missing.Count > 0)
+                return "Server slot_data missing required keys: " + string.Join(", ", missing);
+
+            Debug.Log($"[KSP-AP] slot_data validated: {eventScale.Count} events, " +
+                      $"{TechDisplayNames.Count} tech nodes, {kerbinAltThresholds.Length} alt thresholds, " +
+                      $"{startingInvCount} starting inv");
+            return null;
         }
 
         private long LookupId(string name) =>
@@ -439,7 +430,7 @@ namespace KSPArchipelago
         // Reports all unchecked slots for a body/event pair (up to event scale).
         private void ReportBodyEvent(string bodyName, string eventName)
         {
-            if (!EventScale.TryGetValue(eventName, out int scale))
+            if (!eventScale.TryGetValue(eventName, out int scale))
             {
                 Debug.LogWarning($"[KSP-AP] Unknown event type: '{eventName}'");
                 return;
@@ -474,11 +465,10 @@ namespace KSPArchipelago
         // Starting inventory (zero-requirement locations reported on connect)
         // ------------------------------------------------------------------
 
-        public void ReportStartingInventory(int difficulty)
+        public void ReportStartingInventory()
         {
             if (checkedLocationIds.Contains(LookupId("Starting Inventory 1"))) return;
-            int n = DifficultyStartingCount.TryGetValue(difficulty, out int c) ? c : 15;
-            for (int i = 1; i <= n; i++)
+            for (int i = 1; i <= startingInvCount; i++)
                 ReportLocation($"Starting Inventory {i}");
         }
 
@@ -635,7 +625,7 @@ namespace KSPArchipelago
             if (v.Landed || v.Splashed) return;
 
             double alt = v.altitude;
-            foreach (int threshold in KerbinAltThresholds)
+            foreach (int threshold in kerbinAltThresholds)
             {
                 if (alt >= threshold && !checkedLocationIds.Contains(altitudeIds[threshold]))
                     ReportLocation($"Kerbin {threshold / 1000}km Altitude", grantScience: true);
