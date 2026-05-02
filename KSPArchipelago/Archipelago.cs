@@ -132,29 +132,61 @@ namespace Archipelago
 
         /// <summary>
         /// Full disconnect: close socket, clear reconnect state, notify mod.
-        /// Called by /disconnect command and by the mod on scene change to main menu.
+        /// Called by /disconnect command, the UI Disconnect button, and by the
+        /// mod on scene change to main menu.
         /// </summary>
         public void Disconnect()
         {
             reconnecting = false;
             lastHost = null;
-            var s = currentSession;
-            currentSession = null;
-            if (s?.Socket != null && s.Socket.Connected)
-            {
-                s.Socket.SocketClosed -= OnSocketClosed;
-                s.Socket.DisconnectAsync();
-            }
+            TakeSession();
             mod.HandleDisconnect();
             Log("[KSP-AP] Disconnected.");
         }
 
+        /// <summary>
+        /// Called by other components (e.g. MissionTracker) when a send fails
+        /// because the socket appears closed but the library hasn't fired
+        /// SocketClosed yet (idle TTL, half-open TCP). Triggers the same
+        /// disconnect-and-reconnect path as a graceful close.
+        /// </summary>
+        public void NotifyConnectionLost(string reason)
+        {
+            HandleConnectionLoss(reason, socketAlreadyClosed: false);
+        }
+
         private void OnSocketClosed(string reason)
         {
+            HandleConnectionLoss(reason, socketAlreadyClosed: true);
+        }
+
+        // Single-shot disconnect handler. Whichever caller wins TakeSession does
+        // the work; later callers get null back and no-op.
+        private void HandleConnectionLoss(string reason, bool socketAlreadyClosed)
+        {
+            if (TakeSession(skipDisconnect: socketAlreadyClosed) == null) return;
+
             Log($"[KSP-AP] Server disconnected: {reason}");
+            mod.EnqueueUserToast("AP: Server disconnected — reconnecting...");
             mod.HandleDisconnect();
+
             if (!reconnecting && lastHost != null)
                 ScheduleReconnect();
+        }
+
+        // Atomically takes the current session and tears down its socket.
+        // Returns the taken session, or null if already taken by another caller.
+        private ArchipelagoSession TakeSession(bool skipDisconnect = false)
+        {
+            var s = Interlocked.Exchange(ref currentSession, null);
+            if (s?.Socket == null) return s;
+            s.Socket.SocketClosed -= OnSocketClosed;
+            if (!skipDisconnect && s.Socket.Connected)
+            {
+                try { s.Socket.DisconnectAsync(); }
+                catch (Exception ex) { Log($"[KSP-AP] DisconnectAsync error: {ex.Message}"); }
+            }
+            return s;
         }
 
         private void ScheduleReconnect()
@@ -174,8 +206,11 @@ namespace Archipelago
         private void AttemptReconnect()
         {
             Log($"[KSP-AP] Attempting reconnect ({backoffIndex}/{BackoffDelays.Length})...");
+            mod.EnqueueUserToast($"AP: Reconnecting (attempt {backoffIndex})...");
             Connect(lastHost, lastPort, lastSlot, lastPassword);
-            if (!mod.IsConnected)
+            if (mod.IsConnected)
+                mod.EnqueueUserToast("AP: Reconnected.");
+            else
                 ScheduleReconnect(); // keep trying
         }
     }

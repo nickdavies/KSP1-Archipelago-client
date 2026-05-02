@@ -311,6 +311,19 @@ namespace KSPArchipelago
         private bool gameLoaded = false;
         public Archipelago.APConsole Console { get; private set; }
 
+        // Thread-safe queue of user-visible messages drained on the main thread
+        // by Update(). Lets background callbacks (socket close, reconnect) post
+        // toasts without touching Unity APIs off-thread.
+        private readonly Queue<string> _userToastQueue = new Queue<string>();
+        private readonly object _toastLock = new object();
+
+        /// <summary>Thread-safe: enqueue a toast to be shown on the next Update().</summary>
+        public void EnqueueUserToast(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return;
+            lock (_toastLock) _userToastQueue.Enqueue(message);
+        }
+
         // Slot data from AP server.
         public int Goal { get; private set; }
         public int Difficulty { get; private set; }
@@ -479,6 +492,16 @@ namespace KSPArchipelago
                 ScreenMessages.PostScreenMessage(msg, 10f, ScreenMessageStyle.UPPER_CENTER);
                 Debug.LogError($"[KSP-AP] {msg}");
                 _slotDataError = null;
+            }
+
+            // Drain background-queued toasts (disconnect, reconnect, etc.).
+            lock (_toastLock)
+            {
+                while (_userToastQueue.Count > 0)
+                {
+                    string toast = _userToastQueue.Dequeue();
+                    ScreenMessages.PostScreenMessage(toast, 6f, ScreenMessageStyle.UPPER_CENTER);
+                }
             }
 
             if (_needsReset)
@@ -703,7 +726,9 @@ namespace KSPArchipelago
                     missionTracker.SetPendingNames(ApScenarioModule.Instance.PendingLocationNames);
 
                 string trackerError = missionTracker.OnConnect(session, Difficulty, TechSlotsPerNode,
-                    () => LocationsCheckedCount++, sd);
+                    onLocationReported: () => LocationsCheckedCount++,
+                    onSendFailed: reason => Console?.NotifyConnectionLost(reason),
+                    slotData: sd);
                 if (trackerError != null)
                 {
                     Debug.LogError($"[KSP-AP] {trackerError}");

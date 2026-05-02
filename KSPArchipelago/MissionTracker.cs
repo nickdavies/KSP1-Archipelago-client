@@ -64,6 +64,9 @@ namespace KSPArchipelago
         private bool eventsRegistered = false;
         private int techSlotsPerNode = 4;
         private Action onLocationReported;
+        // Invoked when a location send throws (likely a closed socket the
+        // library hasn't surfaced yet). Lets APConsole start its reconnect cycle.
+        private Action<string> onSendFailed;
 
         // Locations detected while offline, queued for sending on reconnect.
         // Shared reference with ApScenarioModule for save/load persistence.
@@ -97,10 +100,12 @@ namespace KSPArchipelago
         /// </summary>
         public string OnConnect(ArchipelagoSession newSession, int difficulty, int techSlots = 4,
                                 Action onLocationReported = null,
+                                Action<string> onSendFailed = null,
                                 Dictionary<string, object> slotData = null)
         {
             session = newSession;
             this.onLocationReported = onLocationReported;
+            this.onSendFailed = onSendFailed;
             techSlotsPerNode = techSlots;
 
             string error = ParseSlotData(slotData);
@@ -395,36 +400,61 @@ namespace KSPArchipelago
         /// When grantScience is true, awards a small science bonus on first report.
         private void ReportLocation(string name, bool grantScience = false)
         {
-            if (session == null)
+            var s = session;
+            if (s == null)
             {
                 if (!initialized) return; // never connected — ignore pre-connection events
                 if (!pendingLocationNames.Add(name)) return; // already queued
-                onLocationReported?.Invoke();
-                if (grantScience && ResearchAndDevelopment.Instance != null)
-                    ResearchAndDevelopment.Instance.AddScience(MissionScienceBonus, TransactionReasons.ScienceTransmission);
+                GrantLocalReward(grantScience);
                 Debug.Log($"[KSP-AP] Queued (offline): {name}");
                 return;
             }
+
+            long id;
             try
             {
-                long id = session.Locations.GetLocationIdFromName(session.ConnectionInfo.Game, name);
-                if (id < 0)
-                {
-                    Debug.LogWarning($"[KSP-AP] Unknown location: '{name}'");
-                    return;
-                }
-                if (!checkedLocationIds.Add(id))
-                    return; // already reported
-                session.Locations.CompleteLocationChecks(id);
-                onLocationReported?.Invoke();
-                if (grantScience && ResearchAndDevelopment.Instance != null)
-                    ResearchAndDevelopment.Instance.AddScience(MissionScienceBonus, TransactionReasons.ScienceTransmission);
+                id = s.Locations.GetLocationIdFromName(s.ConnectionInfo.Game, name);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[KSP-AP] Location lookup failed for '{name}': {ex.Message}");
+                return;
+            }
+            if (id < 0)
+            {
+                Debug.LogWarning($"[KSP-AP] Unknown location: '{name}'");
+                return;
+            }
+            if (!checkedLocationIds.Add(id))
+                return; // already reported
+
+            try
+            {
+                s.Locations.CompleteLocationChecks(id);
+                GrantLocalReward(grantScience);
                 Debug.Log($"[KSP-AP] Checked: {name}");
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[KSP-AP] ReportLocation failed for '{name}': {ex.Message}");
+                // Send failed — likely socket closed but library hasn't fired
+                // SocketClosed yet. Roll back the dedup add so FlushPending can
+                // re-send after reconnect, queue the name, and notify the
+                // console so it starts the reconnect cycle. Still grant the
+                // local reward — the player did the thing in game.
+                Debug.LogWarning($"[KSP-AP] ReportLocation send failed for '{name}': {ex.Message}");
+                checkedLocationIds.Remove(id);
+                pendingLocationNames.Add(name);
+                GrantLocalReward(grantScience);
+                onSendFailed?.Invoke(ex.Message);
             }
+        }
+
+        private void GrantLocalReward(bool grantScience)
+        {
+            onLocationReported?.Invoke();
+            if (grantScience && ResearchAndDevelopment.Instance != null)
+                ResearchAndDevelopment.Instance.AddScience(
+                    MissionScienceBonus, TransactionReasons.ScienceTransmission);
         }
 
         // Reports all unchecked slots for a body/event pair (up to event scale).
@@ -441,24 +471,46 @@ namespace KSPArchipelago
 
         /// <summary>
         /// Sends any locations queued while offline to the now-connected server.
+        /// Stops on the first send failure so unflushed names stay queued for
+        /// the next reconnect.
         /// </summary>
         private void FlushPending()
         {
             if (pendingLocationNames.Count == 0) return;
             Debug.Log($"[KSP-AP] Flushing {pendingLocationNames.Count} pending offline locations");
+            var done = new List<string>();
             foreach (string name in new List<string>(pendingLocationNames))
             {
                 long id = session.Locations.GetLocationIdFromName(session.ConnectionInfo.Game, name);
                 if (id < 0)
                 {
                     Debug.LogWarning($"[KSP-AP] Flush: unknown location '{name}', skipping");
+                    done.Add(name);
                     continue;
                 }
-                if (!checkedLocationIds.Add(id)) continue; // server already has it
-                session.Locations.CompleteLocationChecks(id);
-                Debug.Log($"[KSP-AP] Flushed: {name}");
+                if (!checkedLocationIds.Add(id))
+                {
+                    done.Add(name); // server already has it
+                    continue;
+                }
+                try
+                {
+                    session.Locations.CompleteLocationChecks(id);
+                    Debug.Log($"[KSP-AP] Flushed: {name}");
+                    done.Add(name);
+                }
+                catch (Exception ex)
+                {
+                    // Disconnected mid-flush. Roll back the dedup add and
+                    // leave the rest queued for the next reconnect.
+                    Debug.LogWarning($"[KSP-AP] Flush send failed for '{name}': {ex.Message}");
+                    checkedLocationIds.Remove(id);
+                    onSendFailed?.Invoke(ex.Message);
+                    break;
+                }
             }
-            pendingLocationNames.Clear();
+            foreach (var name in done)
+                pendingLocationNames.Remove(name);
         }
 
         // ------------------------------------------------------------------

@@ -196,7 +196,16 @@ namespace KSPArchipelago
             }
             GUILayout.Space(4);
             if (GUILayout.Button("Disconnect"))
-                mod.HandleDisconnect();
+            {
+                // Route through APConsole so the socket is closed cleanly,
+                // the SocketClosed handler is unhooked, and any pending
+                // reconnect schedule is cancelled.
+                var console = mod.Console;
+                if (console != null)
+                    System.Threading.ThreadPool.QueueUserWorkItem(_ => console.Disconnect());
+                else
+                    mod.HandleDisconnect();
+            }
         }
 
         private void DrawConnectionForm()

@@ -42,7 +42,11 @@ namespace KSPArchipelago
                     if (int.TryParse(s.Trim(), out int idx))
                         AwardedItemIndices.Add(idx);
 
-            PendingLocationNames = new HashSet<string>();
+            // Merge save-file names into the existing in-memory set rather than
+            // replacing it. Replacing would lose locations checked while offline
+            // if the player reverts a flight before reconnecting — the in-memory
+            // names would vanish and never be sent. Merging means a revert only
+            // adds back save-file names; anything queued since the last save is kept.
             string pendingRaw = node.GetValue("pendingLocations");
             if (!string.IsNullOrEmpty(pendingRaw))
                 foreach (string s in pendingRaw.Split('|'))
