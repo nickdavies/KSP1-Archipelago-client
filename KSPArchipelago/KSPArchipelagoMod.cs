@@ -76,6 +76,24 @@ namespace KSPArchipelago
 
             var mod = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
 
+            // Progressive Launch Pad: raise the buildable launch-mass cap.
+            if (itemName == "Progressive Launch Pad")
+            {
+                if (mod != null)
+                {
+                    int newLevel = mod.IncrementProgressiveCount(itemName);
+                    if (showToast)
+                    {
+                        float newCap = mod.CurrentLaunchPadMassCap;
+                        string capStr = float.IsPositiveInfinity(newCap) ? "unlimited" : $"{newCap:F0} t";
+                        toastText = $"AP: Launch Pad Upgraded → {capStr} max launch mass";
+                        ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                        PostToMessageSystem(senderName, locationName, toastText);
+                    }
+                }
+                return;
+            }
+
             // Progressive R&D: upgrade the tech tree band limit.
             if (itemName == "Progressive R&D")
             {
@@ -328,6 +346,30 @@ namespace KSPArchipelago
         public int Goal { get; private set; }
         public int Difficulty { get; private set; }
         public int TechSlotsPerNode { get; private set; }
+
+        // Progressive Launch Pad tonnage caps from slot_data
+        // (tier index → cap, -1 = unlimited). Null when the
+        // progressive_launch_pad option is disabled; in that case no mass
+        // gating applies.
+        public List<float> LaunchPadMassCaps { get; private set; }
+
+        /// <summary>
+        /// Current launch-pad mass cap based on collected "Progressive Launch
+        /// Pad" items. Returns float.PositiveInfinity when uncapped (option
+        /// disabled, or top tier reached).
+        /// </summary>
+        public float CurrentLaunchPadMassCap
+        {
+            get
+            {
+                if (LaunchPadMassCaps == null || LaunchPadMassCaps.Count == 0)
+                    return float.PositiveInfinity;
+                _progressiveCounts.TryGetValue("Progressive Launch Pad", out int count);
+                int idx = System.Math.Min(count, LaunchPadMassCaps.Count - 1);
+                float cap = LaunchPadMassCaps[idx];
+                return cap < 0 ? float.PositiveInfinity : cap;
+            }
+        }
 
         // Progressive R&D: current band level (0 = base, up to 3).
         public int RDLevel { get; private set; }
@@ -672,6 +714,12 @@ namespace KSPArchipelago
                     }
                 }
                 else missing.Add("progressive_tiers");
+
+                // Optional: launch-pad mass-cap progression (only present when option enabled).
+                if (sd.TryGetValue("progressive_launch_pad_caps", out object padObj) && padObj is JArray padArr)
+                {
+                    LaunchPadMassCaps = padArr.ToObject<List<float>>();
+                }
 
                 ProgressiveRepresentatives = new Dictionary<string, Dictionary<int, string>>();
                 if (sd.TryGetValue("progressive_representatives", out object prObj) && prObj is JObject prDict)
