@@ -23,24 +23,13 @@ namespace KSPArchipelago
         private Dictionary<string, int> eventScale = new Dictionary<string, int>();
         private int startingInvCount = 0;
 
-        // KSC biome strings (KSP game-internal) → AP location name.
-        // Keys come from the game, so they must stay here.  Values are validated
-        // against slot_data at connect time.
-        private static readonly Dictionary<string, string> KscBiomeToLocation = new Dictionary<string, string>
-        {
-            {"LaunchPad",        "KSC LaunchPad"},
-            {"Runway",           "KSC Runway"},
-            {"Administration",   "KSC Administration"},
-            {"AstronautComplex", "KSC Astronaut Complex"},
-            {"FlagPole",         "KSC Flag Pole (Astronaut Complex)"},
-            {"SPH",              "KSC SPH"},
-            {"VAB",              "KSC VAB"},
-            {"TrackingStation",  "KSC Tracking Station"},
-            {"MissionControl",   "KSC Mission Control"},
-            {"Crawlerway",       "KSC Crawlerway"},
-            {"R&D",              "KSC R&D"},
-            {"KSC",              "KSC Grounds"},
-        };
+        // KSP game-internal biome key → AP location name.  Populated from
+        // slot_data at connect time; the server is the single source of
+        // truth for both the biome keys and the location names.  Iteration
+        // order is preserved from the JSON, which the server orders so
+        // that the catch-all "KSC" key falls last (sub-biome fallback uses
+        // StartsWith on the key).
+        private Dictionary<string, string> kscBiomeToLocation = new Dictionary<string, string>();
 
         // Tech tree node_id → display_name.  Populated from slot_data at connect time.
         // Static because TechTreeScout and PlaceholderManager access it.
@@ -180,27 +169,23 @@ namespace KSPArchipelago
             else
                 missing.Add("starting_inv_count");
 
-            // KSC biome names: validate that our hardcoded mapping covers the server's list.
-            if (slotData.TryGetValue("ksc_biome_names", out object kbnObj)
-                && kbnObj is JArray kbnArr)
+            // KSC biome map (biome_key → AP location name).  Server is
+            // authoritative — no hardcoded copy on the client.
+            if (slotData.TryGetValue("ksc_biome_locations", out object kblObj)
+                && kblObj is JObject kblDict)
             {
-                var serverNames = new HashSet<string>();
-                foreach (var tok in kbnArr)
-                    serverNames.Add((string)tok);
-                foreach (var kvp in KscBiomeToLocation)
-                {
-                    if (!serverNames.Contains(kvp.Value))
-                        return $"KSC biome mismatch: client has '{kvp.Value}' but server doesn't";
-                }
+                kscBiomeToLocation = new Dictionary<string, string>();
+                foreach (var kvp in kblDict)
+                    kscBiomeToLocation[kvp.Key] = (string)kvp.Value;
             }
-            else missing.Add("ksc_biome_names");
+            else missing.Add("ksc_biome_locations");
 
             if (missing.Count > 0)
                 return "Server slot_data missing required keys: " + string.Join(", ", missing);
 
             Debug.Log($"[KSP-AP] slot_data validated: {eventScale.Count} events, " +
                       $"{TechDisplayNames.Count} tech nodes, {kerbinAltThresholds.Length} alt thresholds, " +
-                      $"{startingInvCount} starting inv");
+                      $"{startingInvCount} starting inv, {kscBiomeToLocation.Count} KSC biomes");
             return null;
         }
 
@@ -603,14 +588,14 @@ namespace KSPArchipelago
 
             // Try exact match first, then StartsWith for sub-biomes
             string locationName = null;
-            if (KscBiomeToLocation.TryGetValue(biome, out string exact))
+            if (kscBiomeToLocation.TryGetValue(biome, out string exact))
             {
                 locationName = exact;
             }
             else
             {
                 // Sub-biome fallback: "VABMainBuilding" → starts with "VAB"
-                foreach (var kvp in KscBiomeToLocation)
+                foreach (var kvp in kscBiomeToLocation)
                 {
                     if (biome.StartsWith(kvp.Key, StringComparison.Ordinal))
                     {
