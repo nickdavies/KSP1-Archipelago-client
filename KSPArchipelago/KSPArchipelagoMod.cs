@@ -347,6 +347,10 @@ namespace KSPArchipelago
         public int Difficulty { get; private set; }
         public int TechSlotsPerNode { get; private set; }
 
+        // Name of the slot's home body. Sourced from slot_data; defaults
+        // to "Kerbin" when the field is absent.
+        public static string StartingBody { get; private set; } = "Kerbin";
+
         // Progressive Launch Pad tonnage caps from slot_data
         // (tier index → cap, -1 = unlimited). Null when the
         // progressive_launch_pad option is disabled; in that case no mass
@@ -684,6 +688,8 @@ namespace KSPArchipelago
                 Goal = sd.TryGetValue("goal", out object goalObj) ? Convert.ToInt32(goalObj) : 0;
                 Difficulty = sd.TryGetValue("difficulty", out object diffObj) ? Convert.ToInt32(diffObj) : -1;
                 if (Difficulty < 0) missing.Add("difficulty");
+                if (sd.TryGetValue("starting_body", out object sbObj))
+                    StartingBody = (string)sbObj;
                 TechSlotsPerNode = sd.TryGetValue("tech_slots_per_node", out object tsObj)
                     ? Convert.ToInt32(tsObj) : -1;
                 if (TechSlotsPerNode < 0) missing.Add("tech_slots_per_node");

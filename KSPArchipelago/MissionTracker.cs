@@ -19,7 +19,7 @@ namespace KSPArchipelago
         public int CheckedCount => checkedLocationIds?.Count ?? 0;
 
         // Populated from slot_data at connect time.
-        private int[] kerbinAltThresholds = new int[0];
+        private int[] homeAltThresholds = new int[0];
         private Dictionary<string, int> eventScale = new Dictionary<string, int>();
         private int startingInvCount = 0;
 
@@ -62,14 +62,15 @@ namespace KSPArchipelago
         private HashSet<string> pendingLocationNames = new HashSet<string>();
 
         // Cached location IDs for hot-path guards (looked up once at init).
-        private long kerbinFirstLaunchId, kerbinFirstStagingId,
-                     kerbinFirstLandingId, kerbinFirstCrashId;
+        private long homeFirstLaunchId, homeFirstStagingId,
+                     homeFirstLandingId, homeFirstCrashId;
         private Dictionary<int, long> altitudeIds;
 
-        // Runtime-only: vessel persistentIds that have achieved Kerbin orbit.
-        // Used to gate "Kerbin Return" — only vessels that orbited Kerbin qualify.
-        // Not persisted; onOrbit re-fires on scene load for orbiting vessels.
-        private readonly HashSet<uint> _vesselsOrbitedKerbin = new HashSet<uint>();
+        // Runtime-only: vessel persistentIds that have achieved home-body orbit.
+        // Used to gate the home-body "Return" event — only vessels that
+        // previously orbited home qualify. Not persisted; onOrbit re-fires
+        // on scene load for orbiting vessels.
+        private readonly HashSet<uint> _vesselsOrbitedHome = new HashSet<uint>();
 
         // Goal detection: cached location IDs whose checks indicate victory.
         // Set via SetGoalLocations() from slot_data; polled by IsGoalMet().
@@ -104,13 +105,14 @@ namespace KSPArchipelago
             Debug.Log($"[KSP-AP] Loaded {checkedLocationIds.Count} checked locations from server.");
 
             // Cache IDs for hot-path guards.
-            kerbinFirstLaunchId = LookupId("Kerbin First Launch");
-            kerbinFirstStagingId = LookupId("Kerbin First Staging");
-            kerbinFirstLandingId = LookupId("Kerbin First Landing");
-            kerbinFirstCrashId = LookupId("Kerbin First Crash");
+            string home = KSPArchipelagoMod.StartingBody;
+            homeFirstLaunchId = LookupId($"{home} First Launch");
+            homeFirstStagingId = LookupId($"{home} First Staging");
+            homeFirstLandingId = LookupId($"{home} First Landing");
+            homeFirstCrashId = LookupId($"{home} First Crash");
             altitudeIds = new Dictionary<int, long>();
-            foreach (int t in kerbinAltThresholds)
-                altitudeIds[t] = LookupId($"Kerbin {t / 1000}km Altitude");
+            foreach (int t in homeAltThresholds)
+                altitudeIds[t] = LookupId($"{home} {t / 1000}km Altitude");
 
             if (!eventsRegistered)
             {
@@ -155,11 +157,13 @@ namespace KSPArchipelago
             }
             else missing.Add("tech_display_names");
 
-            // Kerbin altitude thresholds
+            // Altitude milestone thresholds (home-body suborbital altitudes,
+            // in metres). Slot-data key kept as `kerbin_altitude_thresholds`
+            // for compatibility with the current server-side schema.
             if (slotData.TryGetValue("kerbin_altitude_thresholds", out object katObj)
                 && katObj is JArray katArr)
             {
-                kerbinAltThresholds = katArr.ToObject<int[]>();
+                homeAltThresholds = katArr.ToObject<int[]>();
             }
             else missing.Add("kerbin_altitude_thresholds");
 
@@ -184,7 +188,7 @@ namespace KSPArchipelago
                 return "Server slot_data missing required keys: " + string.Join(", ", missing);
 
             Debug.Log($"[KSP-AP] slot_data validated: {eventScale.Count} events, " +
-                      $"{TechDisplayNames.Count} tech nodes, {kerbinAltThresholds.Length} alt thresholds, " +
+                      $"{TechDisplayNames.Count} tech nodes, {homeAltThresholds.Length} alt thresholds, " +
                       $"{startingInvCount} starting inv, {kscBiomeToLocation.Count} KSC biomes");
             return null;
         }
@@ -292,7 +296,7 @@ namespace KSPArchipelago
         public void Update()
         {
             if (!initialized) return;
-            PollKerbinAltitude();
+            PollHomeAltitude();
         }
 
         // ------------------------------------------------------------------
@@ -579,11 +583,11 @@ namespace KSPArchipelago
         // reaches R&D (transmission, recovery dialog, or direct recovery).
         private void TryMatchKscBiome(string subjectId)
         {
-            const string kerbinLanded = "KerbinSrfLanded";
-            int idx = subjectId.IndexOf(kerbinLanded, StringComparison.Ordinal);
+            string homeSrfLanded = $"{KSPArchipelagoMod.StartingBody}SrfLanded";
+            int idx = subjectId.IndexOf(homeSrfLanded, StringComparison.Ordinal);
             if (idx < 0) return;
 
-            string biome = subjectId.Substring(idx + kerbinLanded.Length);
+            string biome = subjectId.Substring(idx + homeSrfLanded.Length);
             if (string.IsNullOrEmpty(biome)) return;
 
             // Try exact match first, then StartsWith for sub-biomes
@@ -652,20 +656,21 @@ namespace KSPArchipelago
         }
 
         // ------------------------------------------------------------------
-        // Kerbin altitude polling
+        // Home-body altitude polling
         // ------------------------------------------------------------------
 
-        private void PollKerbinAltitude()
+        private void PollHomeAltitude()
         {
             Vessel v = FlightGlobals.ActiveVessel;
-            if (v == null || v.mainBody?.name != "Kerbin") return;
+            string home = KSPArchipelagoMod.StartingBody;
+            if (v == null || v.mainBody?.name != home) return;
             if (v.Landed || v.Splashed) return;
 
             double alt = v.altitude;
-            foreach (int threshold in kerbinAltThresholds)
+            foreach (int threshold in homeAltThresholds)
             {
                 if (alt >= threshold && !checkedLocationIds.Contains(altitudeIds[threshold]))
-                    ReportLocation($"Kerbin {threshold / 1000}km Altitude", grantScience: true);
+                    ReportLocation($"{home} {threshold / 1000}km Altitude", grantScience: true);
             }
         }
 
@@ -682,7 +687,7 @@ namespace KSPArchipelago
         private void OnVesselSOIChanged(GameEvents.HostedFromToAction<Vessel, CelestialBody> data)
         {
             // Report flyby when entering a body's SOI from its parent SOI.
-            // onFlyBy only fires for "new" SOIs, so it misses Kerbin (home body).
+            // onFlyBy only fires for "new" SOIs, so it misses the home body.
             // This catches that case and acts as belt-and-suspenders for all bodies.
             // Leaving a moon back to its planet is filtered out because
             // data.from (the moon) != data.to.referenceBody (the planet's parent).
@@ -695,8 +700,8 @@ namespace KSPArchipelago
         {
             if (!IsMissionVessel(vessel)) return;
             ReportBodyEvent(body.name, "Orbit");
-            if (body.name == "Kerbin")
-                _vesselsOrbitedKerbin.Add(vessel.persistentId);
+            if (body.name == KSPArchipelagoMod.StartingBody)
+                _vesselsOrbitedHome.Add(vessel.persistentId);
         }
 
         private void OnEscape(Vessel vessel, CelestialBody body)
@@ -714,13 +719,13 @@ namespace KSPArchipelago
         private void OnLand(Vessel vessel, CelestialBody body)
         {
             if (!IsMissionVessel(vessel)) return;
-            if (body.name == "Kerbin")
+            if (body.name == KSPArchipelagoMod.StartingBody)
             {
-                // Kerbin Return requires the vessel to have achieved Kerbin orbit.
-                // Sub-orbital hops don't qualify.
-                if (_vesselsOrbitedKerbin.Contains(vessel.persistentId))
+                // Home-body Return requires the vessel to have achieved
+                // home orbit first. Sub-orbital hops don't qualify.
+                if (_vesselsOrbitedHome.Contains(vessel.persistentId))
                 {
-                    ReportBodyEvent("Kerbin", "Return");
+                    ReportBodyEvent(body.name, "Return");
                     foreach (string sampleBody in CollectSurfaceSampleBodies(vessel))
                         ReportBodyEvent(sampleBody, "Sample Return");
                 }
@@ -735,30 +740,36 @@ namespace KSPArchipelago
         {
             Vessel v = data.host;
             if (!IsMissionVessel(v)) return;
-            string body = v.mainBody?.name;
+            CelestialBody mainBody = v.mainBody;
+            string body = mainBody?.name;
+            string home = KSPArchipelagoMod.StartingBody;
 
-            // Kerbin Splashdown (onLand does not fire for SPLASHED)
-            if (data.to == Vessel.Situations.SPLASHED && body == "Kerbin")
-                ReportLocation("Kerbin Splashdown", grantScience: true);
+            // Splashdown on any body with oceans. onLand does not fire for
+            // SPLASHED, so we catch the situation transition here. For
+            // non-home oceans the AP location simply won't exist and the
+            // lookup is dropped.
+            if (data.to == Vessel.Situations.SPLASHED
+                && mainBody != null && mainBody.ocean)
+                ReportLocation($"{body} Splashdown", grantScience: true);
 
-            // First Launch: any transition to FLYING or SUB_ORBITAL on Kerbin.
+            // First Launch: any transition to FLYING or SUB_ORBITAL on the home body.
             // Don't check data.from — KSP can insert PRELAUNCH→LANDED→FLYING
             // when physics settles the vessel on the pad before launch.
-            if (body == "Kerbin"
+            if (body == home
                 && (data.to == Vessel.Situations.FLYING || data.to == Vessel.Situations.SUB_ORBITAL)
-                && !checkedLocationIds.Contains(kerbinFirstLaunchId))
+                && !checkedLocationIds.Contains(homeFirstLaunchId))
             {
-                ReportLocation("Kerbin First Launch", grantScience: true);
+                ReportLocation($"{home} First Launch", grantScience: true);
             }
 
-            // First Landing: transition to LANDED on Kerbin from FLYING or SUB_ORBITAL
-            // (not from PRELAUNCH — that's sitting on the pad)
-            if (body == "Kerbin"
+            // First Landing: transition to LANDED on the home body from FLYING
+            // or SUB_ORBITAL (not from PRELAUNCH — that's sitting on the pad).
+            if (body == home
                 && data.to == Vessel.Situations.LANDED
                 && (data.from == Vessel.Situations.FLYING || data.from == Vessel.Situations.SUB_ORBITAL)
-                && !checkedLocationIds.Contains(kerbinFirstLandingId))
+                && !checkedLocationIds.Contains(homeFirstLandingId))
             {
-                ReportLocation("Kerbin First Landing", grantScience: true);
+                ReportLocation($"{home} First Landing", grantScience: true);
             }
         }
 
@@ -769,52 +780,58 @@ namespace KSPArchipelago
             ReportBodyEvent(body, "Flag Plant");
         }
 
-        // onReturnFromOrbit fires when a vessel lands on Kerbin after having orbited another body.
-        // The body parameter is the remote body (e.g. Mun), not Kerbin.
+        // onReturnFromOrbit fires when a vessel returns to the home body after
+        // having orbited another body. The body parameter is the remote body
+        // (e.g. Mun), not the home.
         private void OnReturnFromOrbit(Vessel vessel, CelestialBody body)
         {
             if (!IsMissionVessel(vessel)) return;
+            string home = KSPArchipelagoMod.StartingBody;
             ReportBodyEvent(body.name, "Return");
-            // Also count as a Kerbin landing (deorbit + recovery)
-            ReportBodyEvent("Kerbin", "Landing");
+            // Also count as a home-body landing (deorbit + recovery)
+            ReportBodyEvent(home, "Landing");
             if (vessel.GetCrewCount() > 0)
-                ReportBodyEvent("Kerbin", "Crewed Landing");
+                ReportBodyEvent(home, "Crewed Landing");
         }
 
-        // onReturnFromSurface fires when a vessel lands on Kerbin after having landed on another body.
+        // onReturnFromSurface fires when a vessel returns to the home body
+        // after having landed on another body.
         private void OnReturnFromSurface(Vessel vessel, CelestialBody body)
         {
             if (!IsMissionVessel(vessel)) return;
+            string home = KSPArchipelagoMod.StartingBody;
             ReportBodyEvent(body.name, "Return");
             foreach (string sampleBody in CollectSurfaceSampleBodies(vessel))
                 ReportBodyEvent(sampleBody, "Sample Return");
-            // Also count as a Kerbin landing (deorbit + recovery)
-            ReportBodyEvent("Kerbin", "Landing");
+            // Also count as a home-body landing (deorbit + recovery)
+            ReportBodyEvent(home, "Landing");
             if (vessel.GetCrewCount() > 0)
-                ReportBodyEvent("Kerbin", "Crewed Landing");
+                ReportBodyEvent(home, "Crewed Landing");
         }
 
         private void OnStageSeparation(EventReport report)
         {
-            if (checkedLocationIds.Contains(kerbinFirstStagingId)) return;
+            if (checkedLocationIds.Contains(homeFirstStagingId)) return;
             Vessel v = FlightGlobals.ActiveVessel;
-            if (v == null || v.mainBody?.name != "Kerbin") return;
-            ReportLocation("Kerbin First Staging", grantScience: true);
+            string home = KSPArchipelagoMod.StartingBody;
+            if (v == null || v.mainBody?.name != home) return;
+            ReportLocation($"{home} First Staging", grantScience: true);
         }
 
         // onCrash / onCrashSplashdown fire per-part on impact destruction.
-        // We only care about the first crash ever on Kerbin.
+        // We only care about the first crash ever on the home body.
         // Use ActiveVessel (like OnStageSeparation) because KSP reclassifies
         // parts as Debris before firing crash events, breaking IsMissionVessel.
         // ActiveVessel is the craft the player is flying, so detached boosters
         // that crash separately won't trigger this.
         private void OnCrash(EventReport report)
         {
-            if (checkedLocationIds.Contains(kerbinFirstCrashId)) return;
+            if (checkedLocationIds.Contains(homeFirstCrashId)) return;
             Vessel v = FlightGlobals.ActiveVessel;
             if (v == null || !IsMissionVessel(v)) return;
-            if (v.mainBody?.name != "Kerbin") return;
-            ReportLocation("Kerbin First Crash", grantScience: true);
+            string home = KSPArchipelagoMod.StartingBody;
+            if (v.mainBody?.name != home) return;
+            ReportLocation($"{home} First Crash", grantScience: true);
         }
 
         private void OnCrewOnEva(GameEvents.FromToAction<Part, Part> action)
