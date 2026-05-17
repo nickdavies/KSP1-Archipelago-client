@@ -1,6 +1,8 @@
 *.ddl
 KSPArchipelago/bin
 KSPArchipelago/obj
+KSPArchipelago.KSC/bin
+KSPArchipelago.KSC/obj
 out/
 lib/
 KSP.log
