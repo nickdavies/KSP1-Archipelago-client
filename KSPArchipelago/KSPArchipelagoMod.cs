@@ -348,6 +348,14 @@ namespace KSPArchipelago
             lock (_toastLock) _userToastQueue.Enqueue(message);
         }
 
+        // Pending starting-body hand-off to the KSC bridge. HandleConnect
+        // runs on a ThreadPool worker (the AP library's connect path),
+        // but the bridge ultimately drives Unity GameObject cloning via
+        // KK — segfaults if called off the main thread. Stash the body
+        // here from HandleConnect; Update() drains and invokes the
+        // bridge on the main thread.
+        private string _pendingBridgeBody = null;
+
         // Slot data from AP server.
         public int Goal { get; private set; }
         public int Difficulty { get; private set; }
@@ -635,6 +643,30 @@ namespace KSPArchipelago
                 }
             }
 
+            // Drain pending bridge invocation set by HandleConnect on
+            // a worker thread. Materialiser ultimately clones Unity
+            // GameObjects, which must happen on the main thread.
+            string bridgeBody = System.Threading.Interlocked.Exchange(
+                ref _pendingBridgeBody, null);
+            if (bridgeBody != null && bridgeBody != "Kerbin")
+            {
+                IStartingBodyHandler bodyHandler = StartingBodyBridge.Current;
+                if (bodyHandler != null)
+                {
+                    bodyHandler.OnStartingBodyResolved(bridgeBody);
+                }
+                else
+                {
+                    EnqueueUserToast(
+                        $"AP: starting_body={bridgeBody} but Kerbal Konstructs not " +
+                        "installed — alien start disabled. Install KK and reconnect.");
+                    Debug.LogError(
+                        $"[KSP-AP] starting_body={bridgeBody} requires KK; " +
+                        "no IStartingBodyHandler registered (KSPArchipelago.KSC.dll " +
+                        "absent or failed to load — typically KerbalKonstructs.dll missing).");
+                }
+            }
+
             if (_needsReset)
             {
                 _needsReset = false;
@@ -803,6 +835,15 @@ namespace KSPArchipelago
                 if (Difficulty < 0) missing.Add("difficulty");
                 if (sd.TryGetValue("starting_body", out object sbObj))
                     StartingBody = (string)sbObj;
+
+
+                // Hand the body to KSPArchipelago.KSC.dll (if installed)
+                // via the main-thread drain in Update(). HandleConnect
+                // runs on a ThreadPool worker, but the bridge ends up
+                // calling KK → UnityEngine.Object.Internal_CloneSingle,
+                // which segfaults off-thread.
+                _pendingBridgeBody = StartingBody;
+
                 TechSlotsPerNode = sd.TryGetValue("tech_slots_per_node", out object tsObj)
                     ? Convert.ToInt32(tsObj) : -1;
                 if (TechSlotsPerNode < 0) missing.Add("tech_slots_per_node");
