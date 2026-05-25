@@ -293,6 +293,9 @@ namespace KSPArchipelago
         {
             if (session == null || ResearchAndDevelopment.Instance == null) return;
 
+            var scenario = ApScenarioModule.Instance;
+            if (scenario == null) return;
+
             float expectedScience = 0f;
             foreach (var item in session.Items.AllItemsReceived)
             {
@@ -300,14 +303,13 @@ namespace KSPArchipelago
                     expectedScience += amount;
             }
 
-            float alreadyAwarded = ApScenarioModule.Instance?.TotalApScienceAwarded ?? 0f;
+            float alreadyAwarded = scenario.TotalApScienceAwarded;
             float delta = expectedScience - alreadyAwarded;
 
             if (delta > 0.01f)
             {
                 ResearchAndDevelopment.Instance.AddScience(delta, TransactionReasons.Cheating);
-                if (ApScenarioModule.Instance != null)
-                    ApScenarioModule.Instance.TotalApScienceAwarded = expectedScience;
+                scenario.TotalApScienceAwarded = expectedScience;
                 Debug.Log($"[KSP-AP] ReconcileApScience: expected={expectedScience}, awarded={alreadyAwarded}, delta={delta}");
             }
             else
