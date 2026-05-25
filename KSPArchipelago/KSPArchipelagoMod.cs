@@ -308,7 +308,7 @@ namespace KSPArchipelago
 
             if (delta > 0.01f)
             {
-                ResearchAndDevelopment.Instance.AddScience(delta, TransactionReasons.Cheating);
+                /// ResearchAndDevelopment.Instance.AddScience(delta, TransactionReasons.Cheating);
                 Debug.Log($"[KSP-AP] ReconcileApScience: expected={expectedScience}, awarded={alreadyAwarded}, delta={delta}");
             }
             else

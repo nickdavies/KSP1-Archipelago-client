@@ -179,15 +179,9 @@ namespace KSPArchipelago
             GUILayout.Space(8);
             if (GUILayout.Button("Re-award All Items"))
             {
-                var scenario = ApScenarioModule.Instance;
-                if (scenario != null && ResearchAndDevelopment.Instance != null)
-                {
-                    // Undo all previously awarded science.
-                    ResearchAndDevelopment.Instance.AddScience(
-                        -scenario.TotalApScienceAwarded, TransactionReasons.Cheating);
-                    scenario.TotalApScienceAwarded = 0;
-                    scenario.AwardedItemIndices.Clear();
-                }
+                // Do NOT touch science or AwardedItemIndices here. ProcessAllItems
+                // skips science for indices already in AwardedItemIndices, so
+                // science the player has already spent is preserved.
                 KSPArchipelagoPartsManager.ScrubTechTree();
                 KSPArchipelagoPartsManager.ClearAllExperimentalParts();
                 mod.ResetProgressiveState();
