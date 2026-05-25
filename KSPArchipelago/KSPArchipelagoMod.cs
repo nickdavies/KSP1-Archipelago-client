@@ -26,6 +26,9 @@ namespace KSPArchipelago
         // Populated from slot_data at connect time.
         private static Dictionary<string, float> SciencePackAmounts = new Dictionary<string, float>();
 
+        public static bool TryGetScienceAmount(string itemName, out float amount)
+            => SciencePackAmounts.TryGetValue(itemName, out amount);
+
         /// <summary>
         /// Parse science pack definitions from slot_data. Returns true on success.
         /// </summary>
@@ -50,21 +53,15 @@ namespace KSPArchipelago
         /// </summary>
         public static void GiveItem(string itemName, string senderName,
                                     string locationName,
-                                    bool showToast = true,
-                                    bool awardScience = true)
+                                    bool showToast = true)
         {
             string toastText;
 
-            // Science packs: add science points directly.
+            // Science packs: toast only. R&D award and TotalApScienceAwarded are
+            // written together by the caller (ProcessAllItems / ProcessNewItems) so
+            // all three happen at once and can't desync
             if (SciencePackAmounts.TryGetValue(itemName, out float amount))
             {
-                if (awardScience)
-                {
-                    if (ResearchAndDevelopment.Instance != null)
-                        ResearchAndDevelopment.Instance.AddScience(amount, TransactionReasons.Cheating);
-                    if (ApScenarioModule.Instance != null)
-                        ApScenarioModule.Instance.TotalApScienceAwarded += amount;
-                }
                 if (showToast)
                 {
                     toastText = $"AP: Received {itemName} (+{amount} science)";
@@ -614,31 +611,45 @@ namespace KSPArchipelago
         {
             if (session == null) return;
 
+            var scenario = ApScenarioModule.Instance;
+            if (scenario == null)
+            {
+                Debug.LogWarning("[KSP-AP] ProcessAllItems: ApScenarioModule not ready, skipping");
+                return;
+            }
+
             var allItems = session.Items.AllItemsReceived;
-            var awarded = ApScenarioModule.Instance?.AwardedItemIndices;
+            var awarded = scenario.AwardedItemIndices;
             int count = allItems.Count;
 
-            Debug.Log($"[KSP-AP] ProcessAllItems: {count} items, {awarded?.Count ?? 0} previously awarded");
+            Debug.Log($"[KSP-AP] ProcessAllItems: {count} items, {awarded.Count} previously awarded");
 
             for (int i = 0; i < count; i++)
             {
                 var item = allItems[i];
                 if (item.ItemName == null) continue;
 
-                bool alreadyAwarded = awarded != null && awarded.Contains(i);
+                bool alreadyAwarded = awarded.Contains(i);
                 KSPArchipelagoPartsManager.GiveItem(
                     item.ItemName, item.Player?.Alias, item.LocationName,
-                    showToast: !alreadyAwarded,
-                    awardScience: !alreadyAwarded);
+                    showToast: !alreadyAwarded);
 
                 if (!alreadyAwarded)
-                    awarded?.Add(i);
+                {
+                    awarded.Add(i);
+                    if (KSPArchipelagoPartsManager.TryGetScienceAmount(item.ItemName, out float sciAmt))
+                    {
+                        if (ResearchAndDevelopment.Instance != null)
+                            ResearchAndDevelopment.Instance.AddScience(sciAmt, TransactionReasons.Cheating);
+                        scenario.TotalApScienceAwarded += sciAmt;
+                    }
+                }
             }
 
             _lastProcessedIndex = count;
             ItemsReceivedCount = count;
 
-            Debug.Log($"[KSP-AP] ProcessAllItems complete: {awarded?.Count ?? 0} total awarded");
+            Debug.Log($"[KSP-AP] ProcessAllItems complete: {awarded.Count} total awarded");
         }
 
         /// <summary>
@@ -648,8 +659,11 @@ namespace KSPArchipelago
         {
             if (session == null) return;
 
+            var scenario = ApScenarioModule.Instance;
+            if (scenario == null) return;
+
             var allItems = session.Items.AllItemsReceived;
-            var awarded = ApScenarioModule.Instance?.AwardedItemIndices;
+            var awarded = scenario.AwardedItemIndices;
             int count = allItems.Count;
 
             if (count <= _lastProcessedIndex) return;
@@ -661,9 +675,15 @@ namespace KSPArchipelago
 
                 KSPArchipelagoPartsManager.GiveItem(
                     item.ItemName, item.Player?.Alias, item.LocationName,
-                    showToast: true, awardScience: true);
+                    showToast: true);
 
-                awarded?.Add(i);
+                awarded.Add(i);
+                if (KSPArchipelagoPartsManager.TryGetScienceAmount(item.ItemName, out float sciAmt))
+                {
+                    if (ResearchAndDevelopment.Instance != null)
+                        ResearchAndDevelopment.Instance.AddScience(sciAmt, TransactionReasons.Cheating);
+                    scenario.TotalApScienceAwarded += sciAmt;
+                }
                 ItemsReceivedCount++;
                 OnItemReceived?.Invoke(item.ItemName);
             }
