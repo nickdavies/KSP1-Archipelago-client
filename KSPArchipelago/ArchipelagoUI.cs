@@ -179,9 +179,24 @@ namespace KSPArchipelago
             GUILayout.Space(8);
             if (GUILayout.Button("Re-award All Items"))
             {
-                // Do NOT touch science or AwardedItemIndices here. ProcessAllItems
-                // skips science for indices already in AwardedItemIndices, so
-                // science the player has already spent is preserved.
+                var scenario = ApScenarioModule.Instance;
+                if (scenario != null && mod.Session != null)
+                {
+                    // Remove only non-science indices from AwardedItemIndices
+                    // ProcessAllItems will re-process parts/progressives as new
+                    // (showing toasts, re-adding them to the editor), while science
+                    // indices stay in the set so science is not re-awarded
+                    var allItems = mod.Session.Items.AllItemsReceived;
+                    var toRemove = new System.Collections.Generic.HashSet<int>();
+                    for (int i = 0; i < allItems.Count; i++)
+                    {
+                        string name = allItems[i].ItemName;
+                        float sciAmt;
+                        if (name == null || !KSPArchipelagoPartsManager.TryGetScienceAmount(name, out sciAmt))
+                            toRemove.Add(i);
+                    }
+                    scenario.AwardedItemIndices.ExceptWith(toRemove);
+                }
                 KSPArchipelagoPartsManager.ScrubTechTree();
                 KSPArchipelagoPartsManager.ClearAllExperimentalParts();
                 mod.ResetProgressiveState();

@@ -612,30 +612,31 @@ namespace KSPArchipelago
         {
             if (session == null) return;
 
+            // ApScenarioModule is not registered for the EDITOR scene. KSP fires
+            // onGameStateLoad when entering the VAB, which triggers this path with
+            // Instance == null. Do NOT bail — GiveItem must still run so parts are
+            // re-added after ClearAllExperimentalParts. Skip science tracking only
+            // when the scenario is unavailable to avoid double-awarding on the next
+            // call when it is available.
             var scenario = ApScenarioModule.Instance;
-            if (scenario == null)
-            {
-                Debug.LogWarning("[KSP-AP] ProcessAllItems: ApScenarioModule not ready, skipping");
-                return;
-            }
+            var awarded = scenario?.AwardedItemIndices;
 
             var allItems = session.Items.AllItemsReceived;
-            var awarded = scenario.AwardedItemIndices;
             int count = allItems.Count;
 
-            Debug.Log($"[KSP-AP] ProcessAllItems: {count} items, {awarded.Count} previously awarded");
+            Debug.Log($"[KSP-AP] ProcessAllItems: {count} items, {awarded?.Count ?? 0} previously awarded");
 
             for (int i = 0; i < count; i++)
             {
                 var item = allItems[i];
                 if (item.ItemName == null) continue;
 
-                bool alreadyAwarded = awarded.Contains(i);
+                bool alreadyAwarded = awarded != null && awarded.Contains(i);
                 KSPArchipelagoPartsManager.GiveItem(
                     item.ItemName, item.Player?.Alias, item.LocationName,
                     showToast: !alreadyAwarded);
 
-                if (!alreadyAwarded)
+                if (!alreadyAwarded && scenario != null)
                 {
                     awarded.Add(i);
                     if (KSPArchipelagoPartsManager.TryGetScienceAmount(item.ItemName, out float sciAmt))
@@ -650,7 +651,7 @@ namespace KSPArchipelago
             _lastProcessedIndex = count;
             ItemsReceivedCount = count;
 
-            Debug.Log($"[KSP-AP] ProcessAllItems complete: {awarded.Count} total awarded");
+            Debug.Log($"[KSP-AP] ProcessAllItems complete: {awarded?.Count ?? 0} total awarded");
         }
 
         /// <summary>
