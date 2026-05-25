@@ -674,19 +674,23 @@ namespace KSPArchipelago
                 var item = allItems[i];
                 if (item.ItemName == null) continue;
 
+                bool alreadyAwarded = awarded.Contains(i);
                 KSPArchipelagoPartsManager.GiveItem(
                     item.ItemName, item.Player?.Alias, item.LocationName,
-                    showToast: true);
+                    showToast: !alreadyAwarded);
 
-                awarded.Add(i);
-                if (KSPArchipelagoPartsManager.TryGetScienceAmount(item.ItemName, out float sciAmt))
+                if (!alreadyAwarded)
                 {
-                    if (ResearchAndDevelopment.Instance != null)
-                        ResearchAndDevelopment.Instance.AddScience(sciAmt, TransactionReasons.Cheating);
-                    scenario.TotalApScienceAwarded += sciAmt;
+                    awarded.Add(i);
+                    if (KSPArchipelagoPartsManager.TryGetScienceAmount(item.ItemName, out float sciAmt))
+                    {
+                        if (ResearchAndDevelopment.Instance != null)
+                            ResearchAndDevelopment.Instance.AddScience(sciAmt, TransactionReasons.Cheating);
+                        scenario.TotalApScienceAwarded += sciAmt;
+                    }
+                    OnItemReceived?.Invoke(item.ItemName);
                 }
                 ItemsReceivedCount++;
-                OnItemReceived?.Invoke(item.ItemName);
             }
 
             _lastProcessedIndex = count;
