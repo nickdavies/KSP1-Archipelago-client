@@ -12,6 +12,14 @@ using Archipelago.MultiClient.Net.Helpers;
 
 namespace KSPArchipelago
 {
+    /// <summary>
+    /// User-visible override for progressive part-tier locking. Persisted in
+    /// the save file via ApScenarioModule. "ServerControlled" defers to the
+    /// `tier_lock_enabled` slot_data flag (which defaults to enabled when
+    /// absent, matching the generation logic's assumption).
+    /// </summary>
+    public enum TierLockMode { Enabled, Disabled, ServerControlled }
+
     public static class KSPArchipelagoPartsManager
     {
         // Tier-locked parts shown in editor as AP-icon placeholders.
@@ -380,6 +388,24 @@ namespace KSPArchipelago
         // Tech node ID → required R&D band (from slot data).
         public Dictionary<string, int> NodeBands { get; private set; }
 
+        // Server-side tier-lock toggle from slot_data. Defaults to true when
+        // the key is absent (older slot_data, generation always assumed tier
+        // locking was on). Consulted only when the user-side TierLockMode is
+        // ServerControlled.
+        public bool ServerTierLockEnabled { get; private set; } = true;
+
+        // Canonical user-side tier-lock override. Lives on the mod (not on
+        // ApScenarioModule) because the scenario is not registered for the
+        // EDITOR scene — placing it here makes it available everywhere, and
+        // ApScenarioModule becomes a save/load shim that calls
+        // SnapshotTierLockModeForSave / LoadTierLockModeFromSave.
+        public TierLockMode TierLockMode { get; private set; } = TierLockMode.ServerControlled;
+        // Set when the user toggles, cleared when the scenario writes our
+        // value to .sfs. Protects an editor-side toggle from being clobbered
+        // by the next scenario.OnLoad reading a stale .sfs value (the EDITOR
+        // scene has no scenario instance, so no OnSave fires on the way out).
+        private bool _tierLockModeDirty = false;
+
         // Progressive part tiers from slot_data: item name → tier → part cfg_names.
         public Dictionary<string, Dictionary<int, List<string>>> ProgressiveTiers { get; private set; }
         // Server-selected representative per progressive tier: item name → tier → cfg_name.
@@ -475,10 +501,71 @@ namespace KSPArchipelago
         }
 
         /// <summary>
+        /// Resolves the user-facing TierLockMode and the server's slot_data
+        /// flag into a single bool: true means tier locking is in effect.
+        /// </summary>
+        public bool IsTierLockEffective()
+        {
+            switch (TierLockMode)
+            {
+                case TierLockMode.Enabled: return true;
+                case TierLockMode.Disabled: return false;
+                default: return ServerTierLockEnabled;
+            }
+        }
+
+        /// <summary>
+        /// Cycle Enabled → Disabled → ServerControlled → Enabled. Callers are
+        /// expected to follow up with a full re-process (Scrub + Clear +
+        /// ResetProgressive + ProcessAllItems) so placeholder state matches
+        /// the new mode.
+        /// </summary>
+        public void CycleTierLockMode()
+        {
+            TierLockMode next;
+            switch (TierLockMode)
+            {
+                case TierLockMode.Enabled: next = TierLockMode.Disabled; break;
+                case TierLockMode.Disabled: next = TierLockMode.ServerControlled; break;
+                default: next = TierLockMode.Enabled; break;
+            }
+            TierLockMode = next;
+            _tierLockModeDirty = true;
+        }
+
+        /// <summary>
+        /// Called by ApScenarioModule.OnLoad. Skipped when the user has
+        /// toggled the mode since the last save — protects editor-side
+        /// changes from a stale .sfs value (the EDITOR scene has no scenario
+        /// instance, so a VAB → KSC transition would otherwise overwrite the
+        /// user's in-editor toggle with the pre-editor save state).
+        /// </summary>
+        public void LoadTierLockModeFromSave(int rawValue)
+        {
+            if (_tierLockModeDirty) return;
+            if (System.Enum.IsDefined(typeof(TierLockMode), rawValue))
+                TierLockMode = (TierLockMode)rawValue;
+        }
+
+        /// <summary>
+        /// Called by ApScenarioModule.OnSave. Clears the dirty flag because
+        /// the on-disk save now reflects the in-memory value.
+        /// </summary>
+        public int SnapshotTierLockModeForSave()
+        {
+            _tierLockModeDirty = false;
+            return (int)TierLockMode;
+        }
+
+        /// <summary>
         /// Check if a part is in a progressive chain whose tier is not yet unlocked.
+        /// Returns false unconditionally when tier locking has been disabled by
+        /// the user or by slot_data — see IsTierLockEffective().
         /// </summary>
         public bool IsPartTierLocked(string partName)
         {
+            if (!IsTierLockEffective())
+                return false;
             if (!_partProgName.TryGetValue(partName, out string progName))
                 return false;  // Not in any progressive chain — always unlockable.
             int requiredTier = _partProgTier[partName];
@@ -727,6 +814,12 @@ namespace KSPArchipelago
                     LaunchPadMassCaps = padArr.ToObject<List<float>>();
                 }
 
+                // Optional: server-side tier-lock toggle. Absent in older
+                // slot_data — field initializer's `true` matches what
+                // generation has always assumed.
+                if (sd.TryGetValue("tier_lock_enabled", out object tlObj))
+                    ServerTierLockEnabled = Convert.ToBoolean(tlObj);
+
                 ProgressiveRepresentatives = new Dictionary<string, Dictionary<int, string>>();
                 if (sd.TryGetValue("progressive_representatives", out object prObj) && prObj is JObject prDict)
                 {
@@ -832,6 +925,11 @@ namespace KSPArchipelago
             lock (sessionLock)
             {
                 gameLoaded = true;
+                // A different save is being loaded — the new save's
+                // TierLockMode (read in the upcoming ApScenarioModule.OnLoad)
+                // should take precedence over any dirty value left over from
+                // the previous session.
+                _tierLockModeDirty = false;
                 // ApScenarioModule.OnLoad will have restored AwardedItemIndices
                 // from the save file before Update() runs the rebuild.
                 _needsReset = true;

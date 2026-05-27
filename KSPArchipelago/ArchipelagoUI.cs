@@ -195,6 +195,30 @@ namespace KSPArchipelago
                 KSPArchipelagoPartsManager.ReconcileApScience(mod.Session);
             }
             GUILayout.Space(4);
+
+            // Tri-state part tier-lock toggle. Cycles Enabled → Disabled →
+            // Server-Controlled. Reads/writes the mod directly (not the
+            // scenario module) so the button works in the EDITOR scene where
+            // ApScenarioModule.Instance is null. Rebuilds placeholder state
+            // without re-awarding science (AwardedItemIndices is preserved,
+            // so ProcessAllItems treats every item as already-awarded).
+            string tlmLabel;
+            switch (mod.TierLockMode)
+            {
+                case TierLockMode.Enabled: tlmLabel = "Enabled"; break;
+                case TierLockMode.Disabled: tlmLabel = "Disabled"; break;
+                default: tlmLabel = "Server-Controlled"; break;
+            }
+            if (GUILayout.Button($"Part Tier Lock: {tlmLabel}"))
+            {
+                mod.CycleTierLockMode();
+                KSPArchipelagoPartsManager.ScrubTechTree();
+                KSPArchipelagoPartsManager.ClearAllExperimentalParts();
+                mod.ResetProgressiveState();
+                mod.ProcessAllItems();
+            }
+            GUILayout.Space(4);
+
             if (GUILayout.Button("Disconnect"))
             {
                 // Route through APConsole so the socket is closed cleanly,
