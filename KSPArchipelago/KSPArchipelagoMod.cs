@@ -348,6 +348,28 @@ namespace KSPArchipelago
             lock (_toastLock) _userToastQueue.Enqueue(message);
         }
 
+        // Pending starting-body hand-off to the KSC bridge. HandleConnect
+        // runs on a ThreadPool worker (the AP library's connect path),
+        // but the bridge ultimately drives Unity GameObject cloning via
+        // KK — segfaults if called off the main thread. Stash the body
+        // here from HandleConnect; Update() drains and invokes the
+        // bridge on the main thread.
+        private string _pendingBridgeBody = null;
+
+        // Pending science_values hand-off. Set by HandleConnect on a
+        // worker thread; Update() drains, validates, and applies on the
+        // main thread (touches FlightGlobals.Bodies). Null = "no scaling,
+        // reset to stock"; non-null = absolute per-body, per-situation
+        // values to write verbatim. Validation hard-fails on any missing
+        // body or situation field — no silent defaults.
+        private Dictionary<string, Dictionary<string, float>> _pendingScienceValues = null;
+        private bool _scienceValuesPending = false;
+        // Always trigger one snapshot+log per connect, even for Kerbin-home
+        // seeds with no science_values payload. Drives the diagnostic dump
+        // ("STOCK ScienceValues" in KSP.log) used to verify hardcoded
+        // bodies.py values against the live KSP install.
+        private bool _stockSnapshotPending = false;
+
         // Slot data from AP server.
         public int Goal { get; private set; }
         public int Difficulty { get; private set; }
@@ -635,6 +657,82 @@ namespace KSPArchipelago
                 }
             }
 
+            // Drain pending bridge invocation set by HandleConnect on
+            // a worker thread. Materialiser ultimately clones Unity
+            // GameObjects, which must happen on the main thread.
+            string bridgeBody = System.Threading.Interlocked.Exchange(
+                ref _pendingBridgeBody, null);
+            if (bridgeBody != null && bridgeBody != "Kerbin")
+            {
+                IStartingBodyHandler bodyHandler = StartingBodyBridge.Current;
+                if (bodyHandler != null)
+                {
+                    bodyHandler.OnStartingBodyResolved(bridgeBody);
+                }
+                else
+                {
+                    EnqueueUserToast(
+                        $"AP: starting_body={bridgeBody} but Kerbal Konstructs not " +
+                        "installed — alien start disabled. Install KK and reconnect.");
+                    Debug.LogError(
+                        $"[KSP-AP] starting_body={bridgeBody} requires KK; " +
+                        "no IStartingBodyHandler registered (KSPArchipelago.KSC.dll " +
+                        "absent or failed to load — typically KerbalKonstructs.dll missing).");
+                }
+            }
+
+            // One-shot stock snapshot + diagnostic log. Always fires
+            // once per connect, even for Kerbin-home seeds, so KSP.log
+            // contains the "STOCK ScienceValues" dump for verifying
+            // hardcoded bodies.py values.
+            if (_stockSnapshotPending)
+            {
+                if (ScienceScaling.PrepareSnapshot())
+                {
+                    lock (sessionLock) { _stockSnapshotPending = false; }
+                }
+            }
+
+            // Drain pending science values set by HandleConnect on a
+            // worker thread. ScienceScaling touches FlightGlobals.Bodies
+            // and must run on the main thread. ValidatePayload returns
+            // "deferred" if bodies aren't loaded yet — flag stays set
+            // and we retry next frame. Any other non-null return is a
+            // hard error: disconnect with toast.
+            if (_scienceValuesPending)
+            {
+                Dictionary<string, Dictionary<string, float>> values;
+                lock (sessionLock) { values = _pendingScienceValues; }
+
+                if (values == null)
+                {
+                    // No payload — Kerbin home, reset to stock (no-op
+                    // unless a previous connect applied scaling).
+                    ScienceScaling.Reset();
+                    lock (sessionLock) { _scienceValuesPending = false; }
+                }
+                else
+                {
+                    string err = ScienceScaling.ValidatePayload(values);
+                    if (err == "deferred")
+                    {
+                        // FlightGlobals not ready — retry next frame.
+                    }
+                    else if (err != null)
+                    {
+                        Debug.LogError($"[KSP-AP] science_values invalid: {err}");
+                        _slotDataError = $"science_values invalid: {err}";
+                        HandleDisconnect();
+                        lock (sessionLock) { _scienceValuesPending = false; }
+                    }
+                    else
+                    {
+                        ScienceScaling.Apply(values);
+                        lock (sessionLock) { _scienceValuesPending = false; }
+                    }
+                }
+            }
+
             if (_needsReset)
             {
                 _needsReset = false;
@@ -803,12 +901,72 @@ namespace KSPArchipelago
                 if (Difficulty < 0) missing.Add("difficulty");
                 if (sd.TryGetValue("starting_body", out object sbObj))
                     StartingBody = (string)sbObj;
+
+                // Hard-fail when the seed wants an alien starting body
+                // but KK isn't installed.  Bridge.Current is null only
+                // when StartingBodyHandler.Awake's KK probe found KK
+                // missing and skipped SetHandler — so a non-Kerbin home
+                // plus null Current means there is no materialiser to
+                // place the alien KSC.  Letting the connect succeed would
+                // leave the player on stock Kerbin pads with Duna-home
+                // science scaling and item routing — a broken state.
+                // Reject by reusing the existing _slotDataError path:
+                // session=null keeps IsConnected false, so ArchipelagoUI
+                // keeps the connect panel open and the KSC facility lock
+                // engaged until KK is installed and KSP restarted.
+                if (StartingBody != null
+                    && StartingBody != "Kerbin"
+                    && StartingBodyBridge.Current == null)
+                {
+                    _slotDataError = "starting_body=" + StartingBody
+                        + " requires KerbalKonstructs (not installed). "
+                        + "Install KerbalKonstructs and restart KSP.";
+                    session = null;
+                    ConnectedSlot = null;
+                    return;
+                }
+
+                // Hand the body to KSPArchipelago.KSC.dll (if installed)
+                // via the main-thread drain in Update(). HandleConnect
+                // runs on a ThreadPool worker, but the bridge ends up
+                // calling KK → UnityEngine.Object.Internal_CloneSingle,
+                // which segfaults off-thread.
+                _pendingBridgeBody = StartingBody;
+
                 TechSlotsPerNode = sd.TryGetValue("tech_slots_per_node", out object tsObj)
                     ? Convert.ToInt32(tsObj) : -1;
                 if (TechSlotsPerNode < 0) missing.Add("tech_slots_per_node");
 
                 if (!KSPArchipelagoPartsManager.SetSciencePacksFromSlotData(sd))
                     missing.Add("science_packs");
+
+                // Optional: home-relative science values. Absent for
+                // Kerbin home (server only emits when home != Kerbin).
+                // When present, the payload MUST be complete (every
+                // body × every situation) — validation happens on the
+                // main thread in Update() before Apply.
+                _pendingScienceValues = null;
+                if (sd.TryGetValue("science_values", out object svObj) && svObj is JObject svDict)
+                {
+                    _pendingScienceValues = new Dictionary<string, Dictionary<string, float>>();
+                    foreach (var bodyEntry in svDict)
+                    {
+                        if (!(bodyEntry.Value is JObject fieldDict))
+                        {
+                            _slotDataError = $"science_values entry for '{bodyEntry.Key}' is not a JSON object";
+                            session = null;
+                            ConnectedSlot = null;
+                            return;
+                        }
+                        var fields = new Dictionary<string, float>();
+                        foreach (var f in fieldDict)
+                            fields[f.Key] = (float)Convert.ToDouble(f.Value);
+                        _pendingScienceValues[bodyEntry.Key] = fields;
+                    }
+                    Debug.Log($"[KSP-AP] Parsed science_values for {_pendingScienceValues.Count} bodies from slot data");
+                }
+                _scienceValuesPending = true;
+                _stockSnapshotPending = true;
 
                 NodeBands = new Dictionary<string, int>();
                 if (sd.TryGetValue("node_bands", out object bandsObj) && bandsObj is JObject bandsDict)
@@ -869,6 +1027,11 @@ namespace KSPArchipelago
                     _slotDataError = error;
                     session = null;
                     ConnectedSlot = null;
+                    // Clear pending science work — aborting the connect,
+                    // don't apply / snapshot from a half-parsed slot_data.
+                    _pendingScienceValues = null;
+                    _scienceValuesPending = false;
+                    _stockSnapshotPending = false;
                     return;
                 }
 
@@ -908,6 +1071,11 @@ namespace KSPArchipelago
                     _slotDataError = trackerError;
                     session = null;
                     ConnectedSlot = null;
+                    // Same as the missing-keys path: aborting connect, so
+                    // don't apply / snapshot from a partial slot_data.
+                    _pendingScienceValues = null;
+                    _scienceValuesPending = false;
+                    _stockSnapshotPending = false;
                     return;
                 }
 
@@ -943,6 +1111,13 @@ namespace KSPArchipelago
                 FindObjectOfType<TechTreeScout>()?.OnDisconnect();
                 session = null;
                 ConnectedSlot = null;
+                // Restore CelestialBody.scienceValues to stock so a
+                // disconnect/quit returns to vanilla KSP science economy.
+                // ScienceScaling.Reset is a no-op if no snapshot was taken.
+                ScienceScaling.Reset();
+                _pendingScienceValues = null;
+                _scienceValuesPending = false;
+                _stockSnapshotPending = false;
             }
         }
 

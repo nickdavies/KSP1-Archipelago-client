@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches: ['**']
-    tags: ['v*']
+    tags: ['v*', 'experimental']
   pull_request:
 
 jobs:
@@ -33,7 +33,7 @@ jobs:
           path: out/KSPArchipelago/
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/tags/experimental'
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -53,3 +53,6 @@ jobs:
         with:
           files: KSPArchipelago.zip
           generate_release_notes: true
+          prerelease: ${{ github.ref == 'refs/tags/experimental' }}
+          make_latest: ${{ github.ref == 'refs/tags/experimental' && 'false' || 'true' }}
+          name: ${{ github.ref == 'refs/tags/experimental' && 'Experimental Release latest features with the most bugs' || '' }}

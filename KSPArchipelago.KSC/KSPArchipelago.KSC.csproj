@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net48</TargetFramework>
+		<KspDir>/home/nick/.local/share/Steam/steamapps/common/Kerbal Space Program</KspDir>
+		<KspManagedDir>$(KspDir)/KSP_Data/Managed</KspManagedDir>
+		<KkDir>$(KspDir)/GameData/KerbalKonstructs</KkDir>
+		<AssemblyName>KSPArchipelago.KSC</AssemblyName>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\KSPArchipelago\KSPArchipelago.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Reference Include="Assembly-CSharp">
+			<HintPath>$(KspManagedDir)/Assembly-CSharp.dll</HintPath>
+		</Reference>
+		<Reference Include="UnityEngine">
+			<HintPath>$(KspManagedDir)/UnityEngine.dll</HintPath>
+		</Reference>
+		<Reference Include="UnityEngine.CoreModule">
+			<HintPath>$(KspManagedDir)/UnityEngine.CoreModule.dll</HintPath>
+		</Reference>
+		<Reference Include="UnityEngine.PhysicsModule">
+			<HintPath>$(KspManagedDir)/UnityEngine.PhysicsModule.dll</HintPath>
+		</Reference>
+		<Reference Include="KerbalKonstructs">
+			<HintPath>$(KkDir)/KerbalKonstructs.dll</HintPath>
+		</Reference>
+	</ItemGroup>
+
+</Project>
