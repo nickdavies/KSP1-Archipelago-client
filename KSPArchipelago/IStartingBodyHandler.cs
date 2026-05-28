@@ -5,11 +5,13 @@ namespace KSPArchipelago
     // is the only bridge through which the main mod hands the selected
     // starting body to the materialiser.
     //
-    // Lifecycle: the KSC DLL's KSPAddon registers itself via
-    // StartingBodyBridge.SetHandler on Awake. If KK is missing, the KSC
-    // DLL fails to JIT and SetHandler is never called — Current stays
-    // null, which is the main mod's signal to surface the missing-KK
-    // toast at AP-connect time.
+    // Lifecycle: the KSC DLL's KSPAddon probes the loaded-assembly list
+    // for KerbalKonstructs on Awake. If KK is present, it calls
+    // StartingBodyBridge.SetHandler(this). If KK is missing, the probe
+    // skips SetHandler and Destroys the addon — Current stays null,
+    // which is the main mod's signal to reject any non-Kerbin
+    // starting_body at AP-connect time (HandleConnect aborts via
+    // _slotDataError instead of forwarding to the bridge).
     public interface IStartingBodyHandler
     {
         // Called from KSPArchipelagoMod.HandleConnect after slot_data

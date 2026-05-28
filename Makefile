@@ -7,9 +7,8 @@ OUT_DIR         = out/KSPArchipelago
 BUILD_DIR_MAIN  = KSPArchipelago/bin/Release/net40
 BUILD_DIR_KSC   = KSPArchipelago.KSC/bin/Release/net48
 LOG             = $(HOME)/workspaces/ksp_ap/ksp_stdout_stderr.log
-KK_DLL          = $(KSP_DIR)/GameData/KerbalKonstructs/KerbalKonstructs.dll
 
-.PHONY: all compile compile-main compile-ksc check-kk stage install run clean deps
+.PHONY: all compile compile-main compile-ksc stage install run clean deps
 
 all: stage
 
@@ -28,15 +27,6 @@ deps:
 	curl -sL $(KK_ZIP_URL) -o /tmp/kk.zip
 	unzip -qo /tmp/kk.zip "GameData/KerbalKonstructs/KerbalKonstructs.dll" -d $(STUBS_DIR)
 	rm -f /tmp/kk.zip
-
-# Fail fast if KK isn't installed in the target KSP — the KSC sub-assembly
-# needs KK at runtime and there's no point deploying without it.
-check-kk:
-	@test -f "$(KK_DLL)" || { \
-	  echo "ERROR: KerbalKonstructs.dll not found at:"; \
-	  echo "  $(KK_DLL)"; \
-	  echo "Install Kerbal Konstructs into KSP GameData before building."; \
-	  exit 1; }
 
 # Generate placeholder parts cfg directly into the staging directory.
 $(OUT_DIR)/ap_placeholders.cfg: scripts/generate_placeholders.py
@@ -74,11 +64,15 @@ stage: compile $(OUT_DIR)/ap_placeholders.cfg
 	cp KSPArchipelago.KSC/Heightmaps/APKSC_KerbinCurve.cfg $(OUT_DIR)/Heightmaps/
 
 # Deploy staged output to KSP GameData.
-install: stage check-kk
+install: stage
 	rsync -a --delete $(OUT_DIR)/ "$(KSP_DIR)/$(MOD_SUBDIR)/"
 
 # Build, install, then launch KSP.
 run: install
+	(sleep 15 && export KSP_ID=$$(xdotool search --class "KSP.x86_64") && xdotool windowmap --sync $$KSP_ID && xdotool windowmove $$KSP_ID 100 100 && xdotool windowfocus $$KSP_ID && xdotool windowraise $$KSP_ID) & \
+	"$(KSP_DIR)/KSP.x86_64" > $(LOG) 2>&1
+
+run-without-install:
 	(sleep 15 && export KSP_ID=$$(xdotool search --class "KSP.x86_64") && xdotool windowmap --sync $$KSP_ID && xdotool windowmove $$KSP_ID 100 100 && xdotool windowfocus $$KSP_ID && xdotool windowraise $$KSP_ID) & \
 	"$(KSP_DIR)/KSP.x86_64" > $(LOG) 2>&1
 

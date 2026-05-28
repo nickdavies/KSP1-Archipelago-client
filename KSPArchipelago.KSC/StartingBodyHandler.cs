@@ -20,10 +20,31 @@ namespace KSPArchipelago.KSC
 
         void Awake()
         {
+            if (!KKLoaded())
+            {
+                Debug.LogWarning("[KSPArchipelago.KSC] KerbalKonstructs not detected — " +
+                                 "leaving StartingBodyBridge unregistered. Non-Kerbin " +
+                                 "starting bodies will be rejected at AP connect.");
+                Destroy(this);
+                return;
+            }
             DontDestroyOnLoad(this);
             Instance = this;
             StartingBodyBridge.SetHandler(this);
             Debug.Log("[KSPArchipelago.KSC] Registered starting-body handler.");
+        }
+
+        // Detect KK via the loaded-assembly list rather than typeof(KK.Type)
+        // — the latter would itself fail to JIT when KK is missing, so the
+        // probe would never run.  AssemblyLoader.loadedAssemblies is KSP's
+        // own assembly list and is safe to enumerate without KK present.
+        private static bool KKLoaded()
+        {
+            foreach (var la in AssemblyLoader.loadedAssemblies)
+            {
+                if (la?.assembly?.GetName().Name == "KerbalKonstructs") return true;
+            }
+            return false;
         }
 
         public void OnStartingBodyResolved(string bodyName)

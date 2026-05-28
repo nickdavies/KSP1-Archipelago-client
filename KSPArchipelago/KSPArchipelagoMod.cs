@@ -902,6 +902,29 @@ namespace KSPArchipelago
                 if (sd.TryGetValue("starting_body", out object sbObj))
                     StartingBody = (string)sbObj;
 
+                // Hard-fail when the seed wants an alien starting body
+                // but KK isn't installed.  Bridge.Current is null only
+                // when StartingBodyHandler.Awake's KK probe found KK
+                // missing and skipped SetHandler — so a non-Kerbin home
+                // plus null Current means there is no materialiser to
+                // place the alien KSC.  Letting the connect succeed would
+                // leave the player on stock Kerbin pads with Duna-home
+                // science scaling and item routing — a broken state.
+                // Reject by reusing the existing _slotDataError path:
+                // session=null keeps IsConnected false, so ArchipelagoUI
+                // keeps the connect panel open and the KSC facility lock
+                // engaged until KK is installed and KSP restarted.
+                if (StartingBody != null
+                    && StartingBody != "Kerbin"
+                    && StartingBodyBridge.Current == null)
+                {
+                    _slotDataError = "starting_body=" + StartingBody
+                        + " requires KerbalKonstructs (not installed). "
+                        + "Install KerbalKonstructs and restart KSP.";
+                    session = null;
+                    ConnectedSlot = null;
+                    return;
+                }
 
                 // Hand the body to KSPArchipelago.KSC.dll (if installed)
                 // via the main-thread drain in Update(). HandleConnect
