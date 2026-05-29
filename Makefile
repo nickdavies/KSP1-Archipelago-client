@@ -50,7 +50,7 @@ compile: compile-main compile-ksc
 
 # Assemble the mod into out/KSPArchipelago.
 stage: compile $(OUT_DIR)/ap_placeholders.cfg
-	mkdir -p $(OUT_DIR)/Models $(OUT_DIR)/Heightmaps
+	mkdir -p $(OUT_DIR)/Models $(OUT_DIR)/Heightmaps $(OUT_DIR)/Flags
 	cp $(BUILD_DIR_MAIN)/KSPArchipelago.dll               $(OUT_DIR)/
 	cp $(BUILD_DIR_MAIN)/Archipelago.MultiClient.Net.dll  $(OUT_DIR)/
 	cp $(BUILD_DIR_MAIN)/Newtonsoft.Json.dll              $(OUT_DIR)/
@@ -59,6 +59,7 @@ stage: compile $(OUT_DIR)/ap_placeholders.cfg
 	cp lib/System.Runtime.Serialization.dll               $(OUT_DIR)/
 	cp assets/ap_icon.png  $(OUT_DIR)/
 	cp assets/Models/AP.mu $(OUT_DIR)/Models/
+	cp assets/Flags/AP.png $(OUT_DIR)/Flags/
 	cp $(BUILD_DIR_KSC)/KSPArchipelago.KSC.dll            $(OUT_DIR)/
 	cp KSPArchipelago.KSC/Heightmaps/APKSC_KerbinCurve.png $(OUT_DIR)/Heightmaps/
 	cp KSPArchipelago.KSC/Heightmaps/APKSC_KerbinCurve.cfg $(OUT_DIR)/Heightmaps/
