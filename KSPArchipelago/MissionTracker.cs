@@ -745,12 +745,12 @@ namespace KSPArchipelago
             string home = KSPArchipelagoMod.StartingBody;
 
             // Splashdown on any body with oceans. onLand does not fire for
-            // SPLASHED, so we catch the situation transition here. For
-            // non-home oceans the AP location simply won't exist and the
-            // lookup is dropped.
+            // SPLASHED, so we catch the situation transition here. This is
+            // a single body-agnostic AP location: splashing on Kerbin, Eve,
+            // or Laythe all check the same "Splashdown" location.
             if (data.to == Vessel.Situations.SPLASHED
                 && mainBody != null && mainBody.ocean)
-                ReportLocation($"{body} Splashdown", grantScience: true);
+                ReportLocation("Splashdown", grantScience: true);
 
             // First Launch: any transition to FLYING or SUB_ORBITAL on the home body.
             // Don't check data.from — KSP can insert PRELAUNCH→LANDED→FLYING
