@@ -82,6 +82,11 @@ namespace KSPArchipelago
             var mod = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
 
             // Progressive Launch Pad: raise the buildable launch-mass cap.
+            // Drives BOTH the legacy artificial cap (for backwards-compat
+            // with existing seeds) AND the new Career-mode facility level
+            // pipeline (CareerUpgradesManager.SetLevel + LiveLimitsSync ->
+            // KKLaunchSite.MaxCraftMass), so both VAB editor display and
+            // alien KK pad enforcement update for free.
             if (itemName == "Progressive Launch Pad")
             {
                 if (mod != null)
@@ -96,16 +101,41 @@ namespace KSPArchipelago
                         PostToMessageSystem(senderName, locationName, toastText);
                     }
                 }
+                CareerUpgradesManager.Instance
+                    ?.IncrementApGrantedLevel("SpaceCenter/LaunchPad");
                 return;
             }
 
-            // Progressive R&D: upgrade the tech tree band limit.
+            // Progressive R&D: upgrade the tech tree band limit AND the
+            // real R&D facility level (which affects science transmission
+            // rate, lab caps, etc. via GameVariables).
             if (itemName == "Progressive R&D")
             {
                 if (mod != null) mod.IncrementRDLevel();
                 if (showToast)
                 {
                     toastText = $"AP: R&D Facility Upgraded to Level {mod?.RDLevel ?? 0}!";
+                    ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                    PostToMessageSystem(senderName, locationName, toastText);
+                }
+                CareerUpgradesManager.Instance
+                    ?.IncrementApGrantedLevel("SpaceCenter/ResearchAndDevelopment");
+                return;
+            }
+
+            // Career-mode facility progressives (Career mode migration —
+            // notes/career_spike.md, plans/career_mode_migration.md §2.3).
+            // Distinct from the legacy "Progressive Launch Pad" (with space)
+            // and "Progressive R&D" handlers above, which drive the artificial
+            // tier system being removed in task #13.
+            if (CareerUpgradesManager.ItemNameToFacilityId.TryGetValue(
+                    itemName, out string facilityId))
+            {
+                int newLevel = CareerUpgradesManager.Instance
+                    ?.IncrementApGrantedLevel(facilityId) ?? 0;
+                if (showToast)
+                {
+                    toastText = $"AP: {itemName} -> Lv{newLevel + 1}";
                     ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
                     PostToMessageSystem(senderName, locationName, toastText);
                 }
@@ -332,6 +362,12 @@ namespace KSPArchipelago
         private readonly object sessionLock = new object();
         private ArchipelagoSession session;
         private MissionTracker missionTracker;
+        /// <summary>
+        /// Public accessor so career-mode managers can fire location checks
+        /// without re-implementing the AP-session plumbing. Returns null
+        /// until Start() runs.
+        /// </summary>
+        public MissionTracker Tracker => missionTracker;
         private bool gameLoaded = false;
         public Archipelago.APConsole Console { get; private set; }
 
@@ -786,6 +822,14 @@ namespace KSPArchipelago
             RDLevel = 0;
             _progressiveCounts = new Dictionary<string, int>();
             _receivedParts = new HashSet<string>();
+            // Career-mode facility levels are progressive state too. If we
+            // don't zero them here, ProcessAllItems re-walking
+            // AllItemsReceived (called on _needsReset from VAB entry/exit
+            // via onGameStateLoad) will IncrementApGrantedLevel for every
+            // already-awarded item, double-counting each one. Symptom:
+            // visiting the VAB after receiving a Progressive Launch Pad
+            // bumps the pad to level 3 on the way back to SC.
+            CareerUpgradesManager.Instance?.ResetApGrantedLevels();
         }
 
         /// <summary>
@@ -939,6 +983,41 @@ namespace KSPArchipelago
 
                 if (!KSPArchipelagoPartsManager.SetSciencePacksFromSlotData(sd))
                     missing.Add("science_packs");
+
+                // Contracts subsystem — three optional slot_data fields:
+                //   - contract_envelope: per-(body,kind) capability bounds.
+                //     Drives procedural generation and anchored payload sizing.
+                //   - contract_slots: anchored AP locations (test_part,
+                //     satellite_with_part).
+                //   - procedural_contract_locations: per-type AP location
+                //     pools that procedural completions consume from.
+                // Each is independently optional — a seed without contracts
+                // simply leaves all three absent.
+                try
+                {
+                    var envTok = sd.TryGetValue("contract_envelope", out object envObj)
+                        ? envObj as Newtonsoft.Json.Linq.JToken : null;
+                    Contracts.ApContractsRuntime.Envelope
+                        = Contracts.ContractEnvelope.Parse(envTok);
+
+                    var slotsTok = sd.TryGetValue("contract_slots", out object csObj)
+                        ? csObj as Newtonsoft.Json.Linq.JToken : null;
+                    Contracts.ApContractSlotManager.SetSlots(
+                        Contracts.ContractSlotSpec.ParseAll(slotsTok));
+
+                    var poolsTok = sd.TryGetValue(
+                            "procedural_contract_locations", out object pclObj)
+                        ? pclObj as Newtonsoft.Json.Linq.JToken : null;
+                    Contracts.ApProceduralCheckManager.SetPools(poolsTok);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"[KSP-AP] contracts slot_data parse failed: {ex}");
+                    _slotDataError = "contracts slot_data parse error: " + ex.Message;
+                    session = null;
+                    ConnectedSlot = null;
+                    return;
+                }
 
                 // Optional: home-relative science values. Absent for
                 // Kerbin home (server only emits when home != Kerbin).

@@ -86,6 +86,31 @@ namespace KSPArchipelago.KSC
             _staticActivate.Invoke(inst, null);
         }
 
+        private static MethodInfo _staticDespawn;
+        private static MethodInfo _staticDeactivate;
+
+        public static void StaticDespawn(StaticInstance inst)
+        {
+            if (_staticDespawn == null)
+            {
+                _staticDespawn = typeof(StaticInstance).GetMethod("Despawn", InstanceNonPublic);
+                if (_staticDespawn == null)
+                    throw new MissingMethodException("KerbalKonstructs.Core.StaticInstance.Despawn not found.");
+            }
+            _staticDespawn.Invoke(inst, null);
+        }
+
+        public static void StaticDeactivate(StaticInstance inst)
+        {
+            if (_staticDeactivate == null)
+            {
+                _staticDeactivate = typeof(StaticInstance).GetMethod("Deactivate", InstanceNonPublic);
+                if (_staticDeactivate == null)
+                    throw new MissingMethodException("KerbalKonstructs.Core.StaticInstance.Deactivate not found.");
+            }
+            _staticDeactivate.Invoke(inst, null);
+        }
+
         public static StaticModel GetModelByName(string name)
         {
             if (_getModelByName == null)

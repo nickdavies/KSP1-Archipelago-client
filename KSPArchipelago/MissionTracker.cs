@@ -13,10 +13,54 @@ namespace KSPArchipelago
     /// Call OnDisconnect() on disconnect (events stay registered, offline checks are queued).
     /// Call Destroy() on mod teardown to unregister events.
     /// </summary>
-    internal class MissionTracker
+    public class MissionTracker
     {
         /// Number of locations already checked (from AP server).
         public int CheckedCount => checkedLocationIds?.Count ?? 0;
+
+        /// True iff the location with this AP name has been checked.
+        /// Resolves name → id via the AP session; returns false on
+        /// unknown names, missing session, or pre-init state. Used by
+        /// the contracts subsystem (ApContractSlotManager) to evaluate
+        /// ContractRequirement expression trees against the player's
+        /// current AP progress.
+        public bool IsLocationChecked(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (session == null || checkedLocationIds == null) return false;
+            long id;
+            try
+            {
+                id = session.Locations.GetLocationIdFromName(
+                    session.ConnectionInfo.Game, name);
+            }
+            catch
+            {
+                return false;
+            }
+            if (id < 0) return false;
+            return checkedLocationIds.Contains(id);
+        }
+
+        /// True iff the AP server recognises this location name (regardless
+        /// of whether it's been checked yet). Used by UX surfaces that
+        /// want to tell the player "this upgrade is a real AP check, wait
+        /// for the matching item" vs "the generator hasn't shipped this
+        /// check yet."
+        public bool IsLocationKnown(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (session == null) return false;
+            try
+            {
+                return session.Locations.GetLocationIdFromName(
+                    session.ConnectionInfo.Game, name) >= 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
         // Populated from slot_data at connect time.
         private int[] homeAltThresholds = new int[0];
@@ -387,7 +431,7 @@ namespace KSPArchipelago
         /// Reports a location by name to the AP server, idempotent.
         /// When offline, queues the name for sending on reconnect.
         /// When grantScience is true, awards a small science bonus on first report.
-        private void ReportLocation(string name, bool grantScience = false)
+        public void ReportLocation(string name, bool grantScience = false)
         {
             var s = session;
             if (s == null)

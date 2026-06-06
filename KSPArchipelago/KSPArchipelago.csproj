@@ -26,6 +26,15 @@
 		<Reference Include="UnityEngine.IMGUIModule">
 			<HintPath>$(KspManagedDir)/UnityEngine.IMGUIModule.dll</HintPath>
 		</Reference>
+		<Reference Include="UnityEngine.UIModule">
+			<HintPath>$(KspManagedDir)/UnityEngine.UIModule.dll</HintPath>
+		</Reference>
+		<Reference Include="UnityEngine.UI">
+			<HintPath>$(KspManagedDir)/UnityEngine.UI.dll</HintPath>
+		</Reference>
+		<Reference Include="UnityEngine.PhysicsModule">
+			<HintPath>$(KspManagedDir)/UnityEngine.PhysicsModule.dll</HintPath>
+		</Reference>
 	</ItemGroup>
 
 </Project>
