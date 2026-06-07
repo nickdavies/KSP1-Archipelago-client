@@ -4,7 +4,7 @@
 // arrives later via AP slot_data — the main mod's HandleConnect calls
 // StartingBodyHandler.OnStartingBodyResolved, which calls
 // ApplyServerBody on this module. If AP connected before this module
-// loaded, PendingBodyName carries the value across.
+// loaded, PendingSpec carries the resolved spec across.
 //
 // Subsequent loads: stored spec drives materialisation. No AP needed
 // to replay an already-bootstrapped save.
@@ -24,7 +24,7 @@ namespace KSPArchipelago.KSC
         // Set by StartingBodyHandler when slot_data is parsed before any
         // SelectorScenarioModule exists in the scene. Consumed by the
         // next OnLoad. Static lifetime spans scene changes.
-        public static string PendingBodyName = null;
+        public static BodySpec? PendingSpec = null;
 
         public string BodyName = "Kerbin";
         public double Lat;
@@ -75,11 +75,11 @@ namespace KSPArchipelago.KSC
             // Fresh save with no spec. If AP already resolved a body in
             // this session, consume it now; otherwise default to Kerbin
             // and wait for the next HandleConnect to call ApplyServerBody.
-            if (!string.IsNullOrEmpty(PendingBodyName))
+            if (PendingSpec != null)
             {
-                string pending = PendingBodyName;
-                PendingBodyName = null;
-                Debug.Log($"[KSPArchipelago.KSC] Fresh save consuming pending body: {pending}");
+                BodySpec pending = PendingSpec.Value;
+                PendingSpec = null;
+                Debug.Log($"[KSPArchipelago.KSC] Fresh save consuming pending body: {pending.Name}");
                 ApplyServerBody(pending);
                 return;
             }
@@ -93,20 +93,22 @@ namespace KSPArchipelago.KSC
         }
 
         // Called by StartingBodyHandler after AP slot_data resolves the
-        // starting body. Looks up the BodySpec, writes it into this
-        // save's scenario data, and (if a scene is loaded) triggers
-        // materialisation directly. Idempotent for the same body within
-        // a session — Materialiser handles its own already-materialised
-        // short-circuit, and mid-session switches are caught by the
-        // existing CurrentBody guard.
-        public void ApplyServerBody(string bodyName)
+        // starting body. The spec (name + landing coordinate) comes
+        // straight from the server's `ksc_site` slot_data row — the client
+        // no longer carries a per-body table. Writes it into this save's
+        // scenario data and (if a scene is loaded) triggers materialisation
+        // directly. Idempotent for the same body within a session —
+        // Materialiser handles its own already-materialised short-circuit,
+        // and mid-session switches are caught by the existing CurrentBody
+        // guard.
+        public void ApplyServerBody(BodySpec spec)
         {
             // AP has now told us the starting body for this save. From here
             // on, LiveLimitsSync uses CurrentBody (not the preemptive hide)
             // to decide whether stock Kerbin pads are launchable.
             Materialiser.ApHomeConfirmed = true;
 
-            if (bodyName == "Kerbin")
+            if (spec.Name == "Kerbin")
             {
                 BodyName = "Kerbin";
                 Lat = Lon = TerrainAltM = 0;
@@ -120,12 +122,6 @@ namespace KSPArchipelago.KSC
                 {
                     Debug.LogError("[KSPArchipelago.KSC] RestoreStockKerbinLaunchSites failed: " + ex);
                 }
-                return;
-            }
-
-            if (!BodyData.TryFindBody(bodyName, out BodySpec spec))
-            {
-                Debug.LogError($"[KSPArchipelago.KSC] AP requested unknown body '{bodyName}' — staying on Kerbin.");
                 return;
             }
 

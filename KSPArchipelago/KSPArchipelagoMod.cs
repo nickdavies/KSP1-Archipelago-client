@@ -403,10 +403,24 @@ namespace KSPArchipelago
         // Pending starting-body hand-off to the KSC bridge. HandleConnect
         // runs on a ThreadPool worker (the AP library's connect path),
         // but the bridge ultimately drives Unity GameObject cloning via
-        // KK — segfaults if called off the main thread. Stash the body
-        // here from HandleConnect; Update() drains and invokes the
-        // bridge on the main thread.
-        private string _pendingBridgeBody = null;
+        // KK — segfaults if called off the main thread. Stash the body +
+        // its KSC site row here from HandleConnect; Update() drains and
+        // invokes the bridge on the main thread. Bundled into one object
+        // so the Interlocked.Exchange publishes name and coordinates
+        // atomically across the two threads.
+        private sealed class PendingStartingBody
+        {
+            public readonly string Name;
+            public readonly double Lat, Lon, TerrainAlt;
+            public readonly bool SkipMapDecal;
+            public PendingStartingBody(string name, double lat, double lon,
+                                       double terrainAlt, bool skipMapDecal)
+            {
+                Name = name; Lat = lat; Lon = lon;
+                TerrainAlt = terrainAlt; SkipMapDecal = skipMapDecal;
+            }
+        }
+        private PendingStartingBody _pendingBridge = null;
 
         // Pending science_values hand-off. Set by HandleConnect on a
         // worker thread; Update() drains, validates, and applies on the
@@ -733,22 +747,24 @@ namespace KSPArchipelago
             // Drain pending bridge invocation set by HandleConnect on
             // a worker thread. Materialiser ultimately clones Unity
             // GameObjects, which must happen on the main thread.
-            string bridgeBody = System.Threading.Interlocked.Exchange(
-                ref _pendingBridgeBody, null);
-            if (bridgeBody != null && bridgeBody != "Kerbin")
+            PendingStartingBody bridge = System.Threading.Interlocked.Exchange(
+                ref _pendingBridge, null);
+            if (bridge != null && !string.IsNullOrEmpty(bridge.Name) && bridge.Name != "Kerbin")
             {
                 IStartingBodyHandler bodyHandler = StartingBodyBridge.Current;
                 if (bodyHandler != null)
                 {
-                    bodyHandler.OnStartingBodyResolved(bridgeBody);
+                    bodyHandler.OnStartingBodyResolved(
+                        bridge.Name, bridge.Lat, bridge.Lon,
+                        bridge.TerrainAlt, bridge.SkipMapDecal);
                 }
                 else
                 {
                     EnqueueUserToast(
-                        $"AP: starting_body={bridgeBody} but Kerbal Konstructs not " +
+                        $"AP: starting_body={bridge.Name} but Kerbal Konstructs not " +
                         "installed — alien start disabled. Install KK and reconnect.");
                     Debug.LogError(
-                        $"[KSP-AP] starting_body={bridgeBody} requires KK; " +
+                        $"[KSP-AP] starting_body={bridge.Name} requires KK; " +
                         "no IStartingBodyHandler registered (KSPArchipelago.KSC.dll " +
                         "absent or failed to load — typically KerbalKonstructs.dll missing).");
                 }
@@ -1017,6 +1033,27 @@ namespace KSPArchipelago
                 if (sd.TryGetValue("starting_body", out object sbObj))
                     StartingBody = (string)sbObj;
 
+                // KSC site row for an alien starting body: the chosen body's
+                // landing coordinate (lat/lon/terrain alt) + map-decal flag.
+                // The client no longer carries a per-body table — it
+                // materialises the alien KSC from this. Required whenever
+                // starting_body isn't Kerbin; Kerbin uses the stock KSC and
+                // sends no row.
+                bool alienStart = StartingBody != null && StartingBody != "Kerbin";
+                double kscLat = 0, kscLon = 0, kscAlt = 0;
+                bool kscSkipDecal = false;
+                if (sd.TryGetValue("ksc_site", out object kscObj) && kscObj is JObject kscJo)
+                {
+                    kscLat = kscJo.Value<double>("lat");
+                    kscLon = kscJo.Value<double>("lon");
+                    kscAlt = kscJo.Value<double>("terrain_alt");
+                    kscSkipDecal = kscJo.Value<bool?>("skip_decal") ?? false;
+                }
+                else if (alienStart)
+                {
+                    missing.Add("ksc_site");
+                }
+
                 // Hard-fail when the seed wants an alien starting body
                 // but KK isn't installed.  Bridge.Current is null only
                 // when StartingBodyHandler.Awake's KK probe found KK
@@ -1041,12 +1078,13 @@ namespace KSPArchipelago
                     return;
                 }
 
-                // Hand the body to KSPArchipelago.KSC.dll (if installed)
-                // via the main-thread drain in Update(). HandleConnect
-                // runs on a ThreadPool worker, but the bridge ends up
-                // calling KK → UnityEngine.Object.Internal_CloneSingle,
+                // Hand the body + its site row to KSPArchipelago.KSC.dll (if
+                // installed) via the main-thread drain in Update().
+                // HandleConnect runs on a ThreadPool worker, but the bridge
+                // ends up calling KK → UnityEngine.Object.Internal_CloneSingle,
                 // which segfaults off-thread.
-                _pendingBridgeBody = StartingBody;
+                _pendingBridge = new PendingStartingBody(
+                    StartingBody, kscLat, kscLon, kscAlt, kscSkipDecal);
 
                 TechSlotsPerNode = sd.TryGetValue("tech_slots_per_node", out object tsObj)
                     ? Convert.ToInt32(tsObj) : -1;
