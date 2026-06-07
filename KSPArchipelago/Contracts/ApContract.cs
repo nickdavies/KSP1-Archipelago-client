@@ -5,22 +5,16 @@ using UnityEngine;
 namespace KSPArchipelago.Contracts
 {
     /// <summary>
-    /// Common abstract base for both anchored and procedural AP contracts.
-    /// Holds shared lifecycle plumbing — stock OFFERED flow, declinable,
-    /// cancellable, no expiry / no deadline — and the display-string
-    /// boilerplate KSP requires every Contract subclass to implement.
+    /// Common base for AP contracts. Holds shared lifecycle plumbing — stock
+    /// OFFERED flow, declinable, cancellable, no expiry / no deadline — and the
+    /// display-string boilerplate KSP requires every Contract subclass to
+    /// implement.
     ///
-    /// Concrete subclasses choose one of the two roles:
-    ///   - ApAnchoredContract — bound to a server-emitted slot spec
-    ///     (test_part, satellite_with_part)
-    ///   - ApProceduralContract — generated randomly within the envelope
-    ///     (tourist, satellite, mass_delivery, altitude_or_orbit), and
-    ///     consumes from per-type AP location pools on completion via
-    ///     ApProceduralCheckManager.
-    ///
-    /// Both feed into StockContractSuppressor's whitelist:
-    /// `!typeof(ApContract).IsAssignableFrom(t)` removes everything that
-    /// isn't one of ours.
+    /// The only concrete subclass is <see cref="ApGenericContract"/>, the
+    /// data-driven contract bound to a server-emitted ContractSlotSpec. This
+    /// base stays separate so StockContractSuppressor's whitelist
+    /// (`!typeof(ApContract).IsAssignableFrom(t)`) keeps a stable anchor type
+    /// even if more contract subclasses are added later.
     /// </summary>
     public abstract class ApContract : Contract
     {
@@ -28,10 +22,14 @@ namespace KSPArchipelago.Contracts
         {
             expiryType = DeadlineType.None;
             deadlineType = DeadlineType.None;
-            // Default prestige. Subclasses can override before AddParameter
-            // calls if they want different reward scaling.
             prestige = ContractPrestige.Trivial;
-            SetReputation(completion: 5f, failure: -2f);
+            // No in-game rewards: the career economy is AP-hacked, so a
+            // reputation reward is pointless — and awarding it would route
+            // through KSP's ModifyReputationDelta / CurrencyModifierQuery
+            // pipeline (the same one that NREs on direct manipulation).
+            // AP grants the real reward when the location check fires.
+            SetReputation(completion: 0f, failure: 0f);
+            SetFunds(advance: 0f, completion: 0f, failure: 0f);
             SetScience(completion: 0f);
             try
             {

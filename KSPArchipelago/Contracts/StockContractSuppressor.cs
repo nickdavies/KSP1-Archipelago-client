@@ -43,6 +43,17 @@ namespace KSPArchipelago.Contracts
             GameEvents.onLevelWasLoadedGUIReady.Remove(OnSceneReady);
         }
 
+        // The player connects to AP from inside SpaceCenter, AFTER
+        // onLevelWasLoadedGUIReady has already fired — so the scene-event path
+        // misses the connect. Re-check every frame in SpaceCenter; the
+        // per-save guard in OnSceneReady makes this a no-op once suppression
+        // has run, so the cost is one FindObjectOfType until connected.
+        void Update()
+        {
+            if (HighLogic.LoadedScene == GameScenes.SPACECENTER)
+                OnSceneReady(GameScenes.SPACECENTER);
+        }
+
         private void OnSceneReady(GameScenes scene)
         {
             // ContractSystem.Instance is non-null only in Career and only
@@ -92,8 +103,13 @@ namespace KSPArchipelago.Contracts
             if (ContractSystem.ContractTypes == null) return 0;
 
             // Snapshot first — modifying while iterating is unsafe.
+            // Remove everything that isn't a CONCRETE ApContract subclass. The
+            // abstract ApContract base would otherwise stay in ContractTypes,
+            // and KSP throws MissingMethodException ("Default constructor not
+            // found") every time it tries to instantiate it on a progress node.
             List<Type> targets = ContractSystem.ContractTypes
-                .Where(t => t != null && !typeof(ApContract).IsAssignableFrom(t))
+                .Where(t => t != null
+                            && (!typeof(ApContract).IsAssignableFrom(t) || t.IsAbstract))
                 .ToList();
 
             foreach (Type t in targets)

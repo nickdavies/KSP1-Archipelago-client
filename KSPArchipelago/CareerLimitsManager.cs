@@ -171,6 +171,30 @@ namespace KSPArchipelago
                 _overrideHost = new GameObject("APCareerGameVariablesHost");
                 DontDestroyOnLoad(_overrideHost);
                 _override = _overrideHost.AddComponent<APCareerGameVariables>();
+
+                // APCareerGameVariables overrides only a few getters but inherits
+                // every GameVariables DATA field — and a freshly AddComponent'd
+                // instance has them all null. Reputation math, for one, evaluates
+                // GameVariables.Instance.reputationAddition/Subtraction (curves);
+                // a null curve NREs in ModifyReputationDelta on every rep change
+                // (ours and KSP's own milestone awards). Copy all base fields from
+                // the original so the override is a faithful stand-in.
+                if (_originalGameVariables != null)
+                {
+                    foreach (var f in typeof(GameVariables).GetFields(
+                        System.Reflection.BindingFlags.Public
+                        | System.Reflection.BindingFlags.NonPublic
+                        | System.Reflection.BindingFlags.Instance))
+                    {
+                        try { f.SetValue(_override, f.GetValue(_originalGameVariables)); }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[KSP-AP] GameVariables field copy "
+                                           + $"'{f.Name}' failed: {ex.Message}");
+                        }
+                    }
+                }
+
                 foreach (var kv in _testFactors) _override.bodyFactors[kv.Key] = kv.Value;
                 GameVariables.Instance = _override;
                 _installed = true;

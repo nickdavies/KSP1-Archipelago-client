@@ -21,9 +21,8 @@ namespace KSPArchipelago
         /// True iff the location with this AP name has been checked.
         /// Resolves name → id via the AP session; returns false on
         /// unknown names, missing session, or pre-init state. Used by
-        /// the contracts subsystem (ApContractSlotManager) to evaluate
-        /// ContractRequirement expression trees against the player's
-        /// current AP progress.
+        /// the contracts subsystem (ApContractManager) to skip contracts
+        /// whose AP location has already been checked.
         public bool IsLocationChecked(string name)
         {
             if (string.IsNullOrEmpty(name)) return false;

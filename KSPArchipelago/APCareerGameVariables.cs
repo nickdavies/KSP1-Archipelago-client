@@ -23,6 +23,15 @@ namespace KSPArchipelago
     public class APCareerGameVariables : GameVariables
     {
         /// <summary>
+        /// When true, GetActiveContractsLimit returns an effectively unlimited
+        /// cap so AP can offer/accept as many contracts as the seed needs.
+        /// Set by CareerHackManager from the `career` slot_data block. Static
+        /// because CareerLimitsManager creates a fresh override instance on
+        /// each install, and the directive must survive re-installs.
+        /// </summary>
+        public static bool UnlimitedContracts = false;
+
+        /// <summary>
         /// Per-getter multipliers. Keyed by the getter method name
         /// (e.g. "GetCraftMassLimit"). Missing keys default to 1.0.
         /// </summary>
@@ -52,5 +61,8 @@ namespace KSPArchipelago
 
         public override double GetDSNRange(float level)
             => base.GetDSNRange(level) * F("GetDSNRange");
+
+        public override int GetActiveContractsLimit(float mCtrlNormLevel)
+            => UnlimitedContracts ? 1000 : base.GetActiveContractsLimit(mCtrlNormLevel);
     }
 }
