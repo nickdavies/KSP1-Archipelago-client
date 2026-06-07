@@ -13,7 +13,7 @@ namespace KSPArchipelago.Contracts.Primitives
     /// mitigation (version handshake + whitelist).
     ///
     /// Schema 1 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
-    /// <c>crew_capacity</c>, <c>plant_flag</c>, <c>sample_return</c>.
+    /// <c>crew_capacity</c>, <c>plant_flag</c>, <c>sample_return</c>, <c>has_system</c>.
     /// </summary>
     public static class ContractPrimitiveRegistry
     {
@@ -31,6 +31,7 @@ namespace KSPArchipelago.Contracts.Primitives
             Register(new CrewCapacityPrimitive());
             Register(new PlantFlagPrimitive());
             Register(new SampleReturnPrimitive());
+            Register(new HasSystemPrimitive());
         }
 
         private static void Register(IContractPrimitive primitive)
