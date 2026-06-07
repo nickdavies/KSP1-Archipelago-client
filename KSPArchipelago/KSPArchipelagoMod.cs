@@ -416,10 +416,9 @@ namespace KSPArchipelago
         // body or situation field — no silent defaults.
         private Dictionary<string, Dictionary<string, float>> _pendingScienceValues = null;
         private bool _scienceValuesPending = false;
-        // Always trigger one snapshot+log per connect, even for Kerbin-home
-        // seeds with no science_values payload. Drives the diagnostic dump
-        // ("STOCK ScienceValues" in KSP.log) used to verify hardcoded
-        // bodies.py values against the live KSP install.
+        // Always take one stock-values snapshot per connect, even for
+        // Kerbin-home seeds with no science_values payload, so Reset() can
+        // restore stock values on disconnect.
         private bool _stockSnapshotPending = false;
 
         // Pending career-hack directives parsed from slot_data on the connect
@@ -676,8 +675,8 @@ namespace KSPArchipelago
         // Track the last processed index for fast incremental polling.
         private int _lastProcessedIndex = 0;
 
-        // Throttle counter for contract telemetry (see Update()).
-        private int _telemFrame = 0;
+        // Throttle counter for the periodic contract reconcile (see Update()).
+        private int _reconcileFrame = 0;
 
         private void Start()
         {
@@ -763,10 +762,9 @@ namespace KSPArchipelago
             if (careerDirectives != null)
                 CareerHackManager.Instance?.Apply(careerDirectives);
 
-            // One-shot stock snapshot + diagnostic log. Always fires
-            // once per connect, even for Kerbin-home seeds, so KSP.log
-            // contains the "STOCK ScienceValues" dump for verifying
-            // hardcoded bodies.py values.
+            // One-shot stock-values snapshot. Always fires once per connect,
+            // even for Kerbin-home seeds, so Reset() can restore stock
+            // science values on disconnect.
             if (_stockSnapshotPending)
             {
                 if (ScienceScaling.PrepareSnapshot())
@@ -836,12 +834,9 @@ namespace KSPArchipelago
             // (ContractSystem loaded). Throttled — immediacy on scene entry comes
             // from OnLevelLoadedGUIReady; this is just the periodic catch-up, and
             // it walks the contract list, so we don't want it every frame.
-            if (session != null && _sceneReady && (++_telemFrame % 30) == 0)
+            if (session != null && _sceneReady && (++_reconcileFrame % 30) == 0)
             {
                 Contracts.ApContractManager.ReconcileOffers();
-                // Contract telemetry (logged only on change): param states,
-                // contract state, live vessel/resource/crew.
-                Contracts.ApContractManager.LogTelemetryOnChange();
             }
 
             missionTracker?.Update();

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using Contracts;
 using UnityEngine;
 
@@ -193,34 +192,6 @@ namespace KSPArchipelago.Contracts
             {
                 if (!TryForceOffer(spec)) break;
             }
-
-            LogStateSummaryOnChange(cs);
-        }
-
-        // Diagnostic: how many of our contracts are live, by state. Logged only
-        // when it changes, so a steady state is silent. Reveals whether a
-        // force-offered contract actually persists in ContractSystem (vs. being
-        // clobbered by KSP's own contract load).
-        private static string _lastSummary;
-
-        private static void LogStateSummaryOnChange(ContractSystem cs)
-        {
-            int active = 0, offered = 0, other = 0;
-            foreach (Contract c in cs.Contracts)
-            {
-                if (!(c is ApGenericContract)) continue;
-                if (c.ContractState == Contract.State.Active) active++;
-                else if (c.ContractState == Contract.State.Offered) offered++;
-                else other++;
-            }
-            string summary = $"AP contracts in ContractSystem: {active} active, "
-                + $"{offered} offered, {other} other (received={_receivedItems.Count}, "
-                + $"manifest={_specs.Count})";
-            if (summary != _lastSummary)
-            {
-                Debug.Log($"[KSP-AP] {summary}");
-                _lastSummary = summary;
-            }
         }
 
         private static HashSet<string> SnapshotLiveLocations()
@@ -248,110 +219,5 @@ namespace KSPArchipelago.Contracts
             var tracker = mod?.Tracker;
             return tracker != null && tracker.IsLocationChecked(apLocationName);
         }
-
-        // ------------------------------------------------------------------
-        // Telemetry — logged on change so a steady state is silent. Lets us
-        // diagnose param non-completion in ONE play-test instead of guessing:
-        // it shows whether each contract is Active, whether its parameters
-        // exist and flip Complete, and the live vessel/resource state the stock
-        // params are evaluating against.
-        // ------------------------------------------------------------------
-        private static string _lastTelem;
-
-        public static void LogTelemetryOnChange()
-        {
-            try
-            {
-                var sb = new StringBuilder();
-                var cs = ContractSystem.Instance;
-                int apCount = 0;
-                if (cs?.Contracts != null)
-                {
-                    foreach (Contract c in cs.Contracts)
-                    {
-                        if (!(c is ApGenericContract g)) continue;
-                        apCount++;
-                        sb.Append($" [{g.BoundLocation}|{c.ContractState}");
-                        foreach (ContractParameter p in c.AllParameters)
-                            sb.Append($" {DescribeParam(p)}");
-                        sb.Append("]");
-                    }
-                }
-
-                Vessel v = FlightGlobals.ActiveVessel;
-                string vctx;
-                if (v == null) vctx = "vessel=none";
-                else
-                {
-                    double ore = 0;
-                    int crewCap = 0;
-                    if (v.parts != null)
-                        foreach (Part part in v.parts)
-                        {
-                            crewCap += part.CrewCapacity;
-                            if (part.Resources != null)
-                                foreach (PartResource r in part.Resources)
-                                    if (r.resourceName == "Ore") ore += r.amount;
-                        }
-                    vctx = $"vessel='{v.vesselName}' body={v.mainBody?.name} "
-                         + $"sit={v.situation} type={v.vesselType} ore={ore:F0} "
-                         + $"crewCap={crewCap}";
-                }
-
-                string summary = $"AP-TELEM contracts={apCount}{sb} | {vctx}";
-                if (summary != _lastTelem)
-                {
-                    Debug.Log($"[KSP-AP] {summary}");
-                    _lastTelem = summary;
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[KSP-AP] telemetry failed: {ex.Message}");
-            }
-        }
-
-        // Reflect the stock params' own target fields + last-computed values so
-        // the log distinguishes: OnUpdate-not-running (currentResource stays 0
-        // while the vessel has ore), data mismatch (targetBody != where you
-        // are), or a completion-logic bug (targets match, value met, still
-        // Incomplete). The fields are private — read by reflection, cached.
-        private static System.Reflection.FieldInfo _fSitBody, _fSitSituation;
-        private static System.Reflection.FieldInfo _fResName, _fResGoal, _fResCurrent;
-
-        private static string DescribeParam(ContractParameter p)
-        {
-            string name = p.GetType().Name;
-            try
-            {
-                if (name == "LocationAndSituationParameter")
-                {
-                    var t = p.GetType();
-                    if (_fSitBody == null) _fSitBody = Priv(t, "targetBody");
-                    if (_fSitSituation == null) _fSitSituation = Priv(t, "targetSituation");
-                    var body = _fSitBody?.GetValue(p) as CelestialBody;
-                    object sit = _fSitSituation?.GetValue(p);
-                    return $"Situation={p.State}(body={body?.name},sit={sit})";
-                }
-                if (name == "ResourcePossessionParameter")
-                {
-                    var t = p.GetType();
-                    if (_fResName == null) _fResName = Priv(t, "resourceName");
-                    if (_fResGoal == null) _fResGoal = Priv(t, "goalResource");
-                    if (_fResCurrent == null) _fResCurrent = Priv(t, "currentResource");
-                    double goal = Convert.ToDouble(_fResGoal?.GetValue(p) ?? 0.0);
-                    double cur = Convert.ToDouble(_fResCurrent?.GetValue(p) ?? 0.0);
-                    return $"Resource={p.State}(res={_fResName?.GetValue(p)},"
-                         + $"goal={goal:F0},cur={cur:F0})";
-                }
-            }
-            catch { /* fall through to the plain form */ }
-            return $"{name}={p.State}";
-        }
-
-        private static System.Reflection.FieldInfo Priv(Type t, string field)
-            => t.GetField(field, System.Reflection.BindingFlags.NonPublic
-                               | System.Reflection.BindingFlags.Public
-                               | System.Reflection.BindingFlags.Instance);
     }
 }

@@ -29,13 +29,6 @@ namespace KSPArchipelago
         private GameObject _overrideHost;
         private bool _installed;
 
-        // Diagnostic GUI for root-causing the Kerbin click-launch regression.
-        // Top-left position so it's visible regardless of multi-monitor / ultra-wide setups.
-        private bool _showDiagnosticGui = true;
-        private Rect _guiRect = new Rect(20, 60, 320, 200);
-        private bool _userSuppressed = false;  // diagnostic override of normal install logic
-        private bool _loggedFirstOnGUI = false;
-
         // Hard-coded test factors. Replaced by slot_data when generation
         // side ships. 1.0 = stock; <1.0 tighter limits; >1.0 more generous.
         // Verified with these values in CareerProbe — VAB editor display +
@@ -69,78 +62,10 @@ namespace KSPArchipelago
 
         private void Sync()
         {
-            // Diagnostic suppression: when the user has toggled the override
-            // off via the in-game GUI, never re-install regardless of mode.
-            // The user toggles it back to re-enable.
-            if (_userSuppressed)
-            {
-                if (_installed) Uninstall();
-                return;
-            }
             bool careerMode = HighLogic.CurrentGame != null
                               && HighLogic.CurrentGame.Mode == Game.Modes.CAREER;
             if (careerMode) Install();
             else Uninstall();
-        }
-
-        void OnGUI()
-        {
-            if (!_loggedFirstOnGUI)
-            {
-                _loggedFirstOnGUI = true;
-                Debug.Log($"[KSP-AP] DIAGNOSTIC GUI: first OnGUI fired "
-                        + $"(scene={HighLogic.LoadedScene}, Screen.width={Screen.width})");
-            }
-            if (!_showDiagnosticGui) return;
-            // Show in any scene — we want to be able to toggle anywhere.
-            _guiRect = GUILayout.Window(0x4C3B7F, _guiRect, DrawDiagnosticWindow,
-                "AP Career Limits — Diag");
-        }
-
-        private void DrawDiagnosticWindow(int id)
-        {
-            GUILayout.BeginVertical();
-            GUILayout.Label($"Override installed: {_installed}");
-            GUILayout.Label($"User suppressed: {_userSuppressed}");
-            GUILayout.Label($"GameVariables.Instance type:");
-            string typeName = "<null>";
-            try { typeName = GameVariables.Instance?.GetType().FullName ?? "<null>"; } catch { }
-            GUILayout.Label($"  {typeName}");
-
-            string toggleLabel = _userSuppressed
-                ? "RE-INSTALL APCareerGameVariables"
-                : "UNINSTALL APCareerGameVariables (diag)";
-            if (GUILayout.Button(toggleLabel))
-            {
-                _userSuppressed = !_userSuppressed;
-                Debug.Log($"[KSP-AP] DIAGNOSTIC: user toggled override suppression "
-                        + $"-> userSuppressed={_userSuppressed}. Re-syncing.");
-                Sync();
-            }
-            if (GUILayout.Button("Dump LaunchPad component tree"))
-            {
-                DumpFacilityComponents("LaunchPad");
-            }
-            if (GUILayout.Button("Dump Runway component tree"))
-            {
-                DumpFacilityComponents("Runway");
-            }
-            if (GUILayout.Button("TOGGLE LaunchPad colliders enabled"))
-            {
-                ToggleFacilityColliders("LaunchPad");
-            }
-            if (GUILayout.Button("TOGGLE LaunchPad LaunchSiteFacility enabled"))
-            {
-                ToggleLaunchSiteFacility("LaunchPad");
-            }
-            if (GUILayout.Button("Dump launch site state NOW"))
-            {
-                string snap = LaunchSiteStateLogger.DumpNow();
-                Debug.Log($"[KSP-AP] DIAG one-shot launch-site state: {snap}");
-            }
-            if (GUILayout.Button("Hide window")) _showDiagnosticGui = false;
-            GUILayout.EndVertical();
-            GUI.DragWindow();
         }
 
         /// <summary>
@@ -223,107 +148,6 @@ namespace KSPArchipelago
             catch (Exception ex)
             {
                 Debug.LogError($"[KSP-AP] APCareerGameVariables uninstall failed: {ex}");
-            }
-        }
-
-        // Dump every Component on the named facility's GameObject hierarchy.
-        // We want to find what handles left-click "Enter" on the LaunchPad
-        // so we can identify the click-launch trigger.
-        private void DumpFacilityComponents(string facilityName)
-        {
-            Upgradeables.UpgradeableFacility target = null;
-            foreach (var f in Resources.FindObjectsOfTypeAll<Upgradeables.UpgradeableFacility>())
-            {
-                if (f != null && f.name == facilityName) { target = f; break; }
-            }
-            if (target == null || target.gameObject == null)
-            {
-                Debug.LogError($"[KSP-AP] DIAG: facility '{facilityName}' not findable");
-                return;
-            }
-            Debug.Log($"[KSP-AP] === DIAG Component dump for facility '{facilityName}' ===");
-            Debug.Log($"[KSP-AP]   root GameObject: '{target.gameObject.name}' "
-                    + $"active={target.gameObject.activeInHierarchy} "
-                    + $"layer={target.gameObject.layer}");
-
-            // Walk hierarchy, log every GameObject + its components.
-            DumpGameObjectAndChildren(target.gameObject, 0);
-
-            Debug.Log($"[KSP-AP] === END dump for '{facilityName}' ===");
-        }
-
-        // Toggle every Collider in the facility's hierarchy. Used to test
-        // whether disabling click reception kills the Kerbin click-launch.
-        private void ToggleFacilityColliders(string facilityName)
-        {
-            Upgradeables.UpgradeableFacility target = null;
-            foreach (var f in Resources.FindObjectsOfTypeAll<Upgradeables.UpgradeableFacility>())
-            {
-                if (f != null && f.name == facilityName) { target = f; break; }
-            }
-            if (target == null) { Debug.LogError($"[KSP-AP] DIAG: '{facilityName}' not found"); return; }
-
-            Collider[] colliders = target.gameObject.GetComponentsInChildren<Collider>(true);
-            // Use the first collider's current state to flip them all uniformly.
-            bool newEnabled = colliders.Length > 0 ? !colliders[0].enabled : false;
-            int count = 0;
-            foreach (var c in colliders)
-            {
-                if (c == null) continue;
-                c.enabled = newEnabled;
-                count++;
-            }
-            Debug.Log($"[KSP-AP] DIAG: toggled {count} Collider(s) on '{facilityName}' -> enabled={newEnabled}");
-        }
-
-        // Toggle the LaunchSiteFacility component (Squad's launch driver).
-        private void ToggleLaunchSiteFacility(string facilityName)
-        {
-            Upgradeables.UpgradeableFacility target = null;
-            foreach (var f in Resources.FindObjectsOfTypeAll<Upgradeables.UpgradeableFacility>())
-            {
-                if (f != null && f.name == facilityName) { target = f; break; }
-            }
-            if (target == null) { Debug.LogError($"[KSP-AP] DIAG: '{facilityName}' not found"); return; }
-
-            int count = 0;
-            bool? newEnabled = null;
-            foreach (var mb in target.gameObject.GetComponentsInChildren<MonoBehaviour>(true))
-            {
-                if (mb == null) continue;
-                if (mb.GetType().Name != "LaunchSiteFacility") continue;
-                if (newEnabled == null) newEnabled = !mb.enabled;
-                mb.enabled = newEnabled.Value;
-                count++;
-            }
-            Debug.Log($"[KSP-AP] DIAG: toggled {count} LaunchSiteFacility component(s) "
-                    + $"on '{facilityName}' -> enabled={newEnabled}");
-        }
-
-        private void DumpGameObjectAndChildren(GameObject go, int depth)
-        {
-            if (go == null) return;
-            string indent = new string(' ', depth * 2);
-            var comps = go.GetComponents<Component>();
-            string compList = "";
-            foreach (var c in comps)
-            {
-                if (c == null) { compList += "[null] "; continue; }
-                compList += c.GetType().Name + " ";
-            }
-            Debug.Log($"[KSP-AP]   {indent}'{go.name}' "
-                    + $"active={go.activeInHierarchy} layer={go.layer} "
-                    + $"comps=[{compList.Trim()}]");
-            // Log collider state specifically
-            foreach (var col in go.GetComponents<Collider>())
-            {
-                if (col == null) continue;
-                Debug.Log($"[KSP-AP]   {indent}  Collider: type={col.GetType().Name} "
-                        + $"enabled={col.enabled} isTrigger={col.isTrigger}");
-            }
-            for (int i = 0; i < go.transform.childCount; i++)
-            {
-                DumpGameObjectAndChildren(go.transform.GetChild(i).gameObject, depth + 1);
             }
         }
 
