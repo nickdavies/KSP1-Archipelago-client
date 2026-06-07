@@ -9,13 +9,15 @@ namespace KSPArchipelago.Contracts.Primitives
     /// <summary>
     /// <c>{ "kind": "situation", "situation": "landed", "body": "Mun" }</c>
     ///
-    /// Maps to stock <see cref="LocationAndSituationParameter"/> when a body
-    /// is given (body-scoped: completes only when the active vessel is in the
-    /// situation at that body), or stock <see cref="ReachSituation"/> when the
-    /// body is omitted (body-agnostic). Both self-monitor the active vessel
-    /// via onVesselSituationChange — no host contract entity required (verified
-    /// against the KSP assembly: LocationAndSituationParameter reads
-    /// FlightGlobals.ActiveVessel + targetBody/targetSituation directly).
+    /// Maps to stock <see cref="LocationAndSituationParameter"/> when a body is
+    /// given (body-scoped: completes when the active vessel is in the situation
+    /// at that body), or stock <see cref="ReachSituation"/> when the body is
+    /// omitted. Both self-monitor the active vessel — no host entity required.
+    ///
+    /// Exception: <c>"flyby"</c> maps to stock <see cref="EnterSOI"/> (entering
+    /// the body's sphere of influence), which is what the generator targets.
+    /// The raw ESCAPING situation would be too strict — a flyby that captures
+    /// into orbit would never tick.
     /// </summary>
     public sealed class SituationPrimitive : IContractPrimitive
     {
@@ -26,20 +28,29 @@ namespace KSPArchipelago.Contracts.Primitives
             string situationStr = (string)spec["situation"];
             if (string.IsNullOrEmpty(situationStr))
                 throw new FormatException("situation primitive missing 'situation'");
-            Vessel.Situations situation = ParseSituation(situationStr);
 
             string bodyName = (string)spec["body"];
-            if (string.IsNullOrEmpty(bodyName))
+            CelestialBody body = null;
+            if (!string.IsNullOrEmpty(bodyName))
+            {
+                body = FlightGlobals.GetBodyByName(bodyName);
+                if (body == null)
+                    throw new FormatException($"situation primitive: unknown body '{bodyName}'");
+            }
+
+            if (situationStr == "flyby")
+            {
+                if (body == null)
+                    throw new FormatException("flyby situation requires a body");
+                return new EnterSOI(body);
+            }
+
+            Vessel.Situations situation = ParseSituation(situationStr);
+            if (body == null)
                 return new ReachSituation(situation, situationStr);
 
-            CelestialBody body = FlightGlobals.GetBodyByName(bodyName);
-            if (body == null)
-                throw new FormatException($"situation primitive: unknown body '{bodyName}'");
-
-            // KSP builds the title as e.g. "Land your <noun> on <body>" — the
-            // noun is the vessel, not a repeat of the situation/body (which
-            // produced "Land your landed at Mun on Mun"). Purely cosmetic; the
-            // completion check uses targetBody + targetSituation, not the noun.
+            // The third arg is a cosmetic noun ("Land your <noun> on <body>");
+            // completion uses targetBody + targetSituation, not the noun.
             return new LocationAndSituationParameter(body, situation, "vessel");
         }
 

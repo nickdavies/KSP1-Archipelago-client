@@ -832,17 +832,17 @@ namespace KSPArchipelago
                 ProcessNewItems();
             }
 
-            // Offer + accept owed contracts, but only once the scene is fully
-            // up (ContractSystem loaded). Cheap once steady: nothing offerable
-            // means a single manifest walk that returns immediately.
-            if (session != null && _sceneReady)
+            // Offer + accept owed contracts once the scene is fully up
+            // (ContractSystem loaded). Throttled — immediacy on scene entry comes
+            // from OnLevelLoadedGUIReady; this is just the periodic catch-up, and
+            // it walks the contract list, so we don't want it every frame.
+            if (session != null && _sceneReady && (++_telemFrame % 30) == 0)
+            {
                 Contracts.ApContractManager.ReconcileOffers();
-
-            // Contract telemetry, ~3x/sec, logged only on change (param states,
-            // contract state, live vessel/resource). Diagnoses param completion
-            // in one play-test instead of a 20-minute guess-and-check loop.
-            if (session != null && (++_telemFrame % 20) == 0)
+                // Contract telemetry (logged only on change): param states,
+                // contract state, live vessel/resource/crew.
                 Contracts.ApContractManager.LogTelemetryOnChange();
+            }
 
             missionTracker?.Update();
 

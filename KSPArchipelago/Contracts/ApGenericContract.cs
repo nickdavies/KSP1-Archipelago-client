@@ -45,10 +45,13 @@ namespace KSPArchipelago.Contracts
             //   - KSP's stock generation poll (runs inside ContractSystem.Update,
             //     always post-load → no scene-load race): PendingSpec is null,
             //     so we bind the next offerable spec.
-            //   - Force-offer (immediate, deterministic): ApContractManager sets
-            //     PendingSpec right before Contract.Generate.
-            // Whichever offers it, ReconcileOffers then accepts it to ACTIVE.
-            ContractSlotSpec spec = PendingSpec ?? ApContractManager.FindNextOfferable();
+            // Force-offer is the SOLE creation path: ApContractManager sets
+            // PendingSpec immediately before Contract.Generate (and adds the
+            // result to ContractSystem one-at-a-time, so dedup is exact). KSP's
+            // stock poll must NOT create contracts — it batch-generates several
+            // per cycle before adding any, so every one binds the same offerable
+            // spec (dedup can't see the in-flight siblings) → 20-30 duplicates.
+            ContractSlotSpec spec = PendingSpec;
             if (spec == null) return false;
 
             // Schema/kind were validated at connect (HandleConnect → registry
@@ -69,13 +72,12 @@ namespace KSPArchipelago.Contracts
             return true;
         }
 
-        // True when something is waiting (so KSP's stock poll offers it), during
-        // a force-offer (PendingSpec set), and forever after for a bound contract
-        // (so KSP never auto-cancels an active one).
+        // True during a force-offer (PendingSpec set) so Contract.Generate
+        // proceeds, and forever after for a bound contract so KSP never
+        // auto-cancels an active one. Returns false for an unbound fresh
+        // instance from KSP's stock poll → the poll can't spawn duplicates.
         public override bool MeetRequirements()
-            => PendingSpec != null
-               || !string.IsNullOrEmpty(BoundLocation)
-               || ApContractManager.HasOfferable();
+            => PendingSpec != null || !string.IsNullOrEmpty(BoundLocation);
 
         protected override void OnCompleted()
         {

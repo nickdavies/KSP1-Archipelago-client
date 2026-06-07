@@ -104,8 +104,6 @@ namespace KSPArchipelago.Contracts
         }
 
         /// <summary>True iff at least one received contract is not yet live.</summary>
-        public static bool HasOfferable() => FindNextOfferable() != null;
-
         /// <summary>
         /// Force a single contract straight to ACTIVE, using KSP's own
         /// generate→offer→add→accept sequence ("if the server says you have it,
@@ -157,18 +155,31 @@ namespace KSPArchipelago.Contracts
 
         /// <summary>
         /// Bring every owed contract to ACTIVE. Called on entering a scene with
-        /// a live ContractSystem. Two passes:
-        ///   1. Accept any ApGenericContract still sitting in Offered — restored
-        ///      from a save, or a force-offer whose inline Accept didn't take.
-        ///   2. Force-activate any received contract not yet present (e.g. its
-        ///      item arrived in the editor where ContractSystem was null).
+        /// a live ContractSystem. Three passes:
+        ///   1. Remove duplicate live contracts for the same location (safety
+        ///      net / heals saves from the old stock-poll duplication bug).
+        ///   2. Accept any ApGenericContract still sitting in Offered.
+        ///   3. Force-activate any received contract not yet present.
         /// </summary>
         public static void ReconcileOffers()
         {
             var cs = ContractSystem.Instance;
             if (cs?.Contracts == null) return;
 
-            // Snapshot — Accept() mutates contract state while we iterate.
+            // Pass 1: drop duplicate live contracts (same BoundLocation), keep one.
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Contract c in new List<Contract>(cs.Contracts))
+            {
+                if (!(c is ApGenericContract g) || string.IsNullOrEmpty(g.BoundLocation)) continue;
+                if (c.ContractState != Contract.State.Offered
+                    && c.ContractState != Contract.State.Active) continue;
+                if (seen.Add(g.BoundLocation)) continue;   // first one — keep
+                try { c.Unregister(); } catch { }
+                cs.Contracts.Remove(c);
+                Debug.Log($"[KSP-AP] removed duplicate contract '{g.BoundLocation}'");
+            }
+
+            // Pass 2: accept anything still merely offered.
             foreach (Contract c in new List<Contract>(cs.Contracts))
             {
                 if (c is ApGenericContract && c.ContractState == Contract.State.Offered)
@@ -273,13 +284,18 @@ namespace KSPArchipelago.Contracts
                 else
                 {
                     double ore = 0;
+                    int crewCap = 0;
                     if (v.parts != null)
                         foreach (Part part in v.parts)
+                        {
+                            crewCap += part.CrewCapacity;
                             if (part.Resources != null)
                                 foreach (PartResource r in part.Resources)
                                     if (r.resourceName == "Ore") ore += r.amount;
+                        }
                     vctx = $"vessel='{v.vesselName}' body={v.mainBody?.name} "
-                         + $"sit={v.situation} type={v.vesselType} ore={ore:F0}";
+                         + $"sit={v.situation} type={v.vesselType} ore={ore:F0} "
+                         + $"crewCap={crewCap}";
                 }
 
                 string summary = $"AP-TELEM contracts={apCount}{sb} | {vctx}";

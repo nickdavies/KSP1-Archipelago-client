@@ -11,8 +11,10 @@ namespace KSPArchipelago.Contracts.Primitives
     /// Maps to stock <see cref="ResourcePossessionParameter"/>: completes when
     /// the active vessel holds at least <c>min</c> units of the named resource.
     /// Verified standalone — its OnUpdate counts the active vessel's resource
-    /// (VesselUtilities.VesselResourceAmount(name, null)) against goalResource;
-    /// the empty vesselName means "no specific vessel designated".
+    /// (VesselUtilities.VesselResourceAmount(name, null)) against goalResource.
+    /// The vesselName is display-only here (the title reads "... in your
+    /// &lt;vesselName&gt;"); it does NOT create a specific-vessel requirement,
+    /// so we pass a generic word rather than leaving it blank.
     /// </summary>
     public sealed class ResourcePrimitive : IContractPrimitive
     {
@@ -31,7 +33,7 @@ namespace KSPArchipelago.Contracts.Primitives
             double min = (double)minTok;
 
             // ctor: (resourceName, resourceTitle, vesselName, goalResource)
-            return new ResourcePossessionParameter(resource, resource, "", min);
+            return new ResourcePossessionParameter(resource, resource, "vessel", min);
         }
     }
 }

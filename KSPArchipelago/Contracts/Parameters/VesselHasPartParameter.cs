@@ -34,7 +34,7 @@ namespace KSPArchipelago.Contracts.Parameters
         protected override string GetTitle()
         {
             if (!string.IsNullOrEmpty(Label))
-                return $"Vessel must carry a {Label}";
+                return $"Vessel must carry a {Label.Replace('_', ' ')}";
             return "Vessel must carry: " + string.Join(" or ", AcceptedPartNames.ToArray());
         }
 

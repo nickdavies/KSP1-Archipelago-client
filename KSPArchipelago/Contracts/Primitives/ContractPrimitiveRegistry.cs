@@ -12,7 +12,8 @@ namespace KSPArchipelago.Contracts.Primitives
     /// build time. This is the runtime half of the client/server drift
     /// mitigation (version handshake + whitelist).
     ///
-    /// Schema 1 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>.
+    /// Schema 1 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
+    /// <c>crew_capacity</c>, <c>plant_flag</c>, <c>sample_return</c>.
     /// </summary>
     public static class ContractPrimitiveRegistry
     {
@@ -27,6 +28,9 @@ namespace KSPArchipelago.Contracts.Primitives
             Register(new SituationPrimitive());
             Register(new ResourcePrimitive());
             Register(new HasAnyPartPrimitive());
+            Register(new CrewCapacityPrimitive());
+            Register(new PlantFlagPrimitive());
+            Register(new SampleReturnPrimitive());
         }
 
         private static void Register(IContractPrimitive primitive)
