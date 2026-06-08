@@ -12,13 +12,14 @@ namespace KSPArchipelago.Contracts.Primitives
     /// build time. This is the runtime half of the client/server drift
     /// mitigation (version handshake + whitelist).
     ///
-    /// Schema 1 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
-    /// <c>crew_capacity</c>, <c>plant_flag</c>, <c>sample_return</c>, <c>has_system</c>.
+    /// Schema 2 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
+    /// <c>crew_capacity</c>, <c>plant_flag</c>, <c>sample_return</c>, <c>has_system</c>,
+    /// <c>specific_orbit</c>, <c>collect_science</c>.
     /// </summary>
     public static class ContractPrimitiveRegistry
     {
         /// <summary>Highest primitive-registry schema this client understands.</summary>
-        public const int Schema = 1;
+        public const int Schema = 2;
 
         private static readonly Dictionary<string, IContractPrimitive> _byKind
             = new Dictionary<string, IContractPrimitive>(StringComparer.Ordinal);
@@ -32,6 +33,8 @@ namespace KSPArchipelago.Contracts.Primitives
             Register(new PlantFlagPrimitive());
             Register(new SampleReturnPrimitive());
             Register(new HasSystemPrimitive());
+            Register(new SpecificOrbitPrimitive());
+            Register(new CollectSciencePrimitive());
         }
 
         private static void Register(IContractPrimitive primitive)
