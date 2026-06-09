@@ -81,7 +81,28 @@ namespace KSPArchipelago
 
             var mod = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
 
+            // Contract items: record receipt only. Offering/accepting happens
+            // from a stable scene (Update → ReconcileOffers, and KSP's stock
+            // poll), never here — GiveItem can run mid scene-load, where adding
+            // a contract races ContractSystem's own load and gets clobbered.
+            if (Contracts.ApContractManager.IsContractItem(itemName))
+            {
+                Contracts.ApContractManager.MarkReceived(itemName);
+                if (showToast)
+                {
+                    toastText = $"AP: New contract available — {itemName}";
+                    ScreenMessages.PostScreenMessage(toastText, 5f, ScreenMessageStyle.UPPER_CENTER);
+                    PostToMessageSystem(senderName, locationName, toastText);
+                }
+                return;
+            }
+
             // Progressive Launch Pad: raise the buildable launch-mass cap.
+            // Drives BOTH the legacy artificial cap (for backwards-compat
+            // with existing seeds) AND the new Career-mode facility level
+            // pipeline (CareerUpgradesManager.SetLevel + LiveLimitsSync ->
+            // KKLaunchSite.MaxCraftMass), so both VAB editor display and
+            // alien KK pad enforcement update for free.
             if (itemName == "Progressive Launch Pad")
             {
                 if (mod != null)
@@ -96,16 +117,41 @@ namespace KSPArchipelago
                         PostToMessageSystem(senderName, locationName, toastText);
                     }
                 }
+                CareerUpgradesManager.Instance
+                    ?.IncrementApGrantedLevel("SpaceCenter/LaunchPad");
                 return;
             }
 
-            // Progressive R&D: upgrade the tech tree band limit.
+            // Progressive R&D: upgrade the tech tree band limit AND the
+            // real R&D facility level (which affects science transmission
+            // rate, lab caps, etc. via GameVariables).
             if (itemName == "Progressive R&D")
             {
                 if (mod != null) mod.IncrementRDLevel();
                 if (showToast)
                 {
                     toastText = $"AP: R&D Facility Upgraded to Level {mod?.RDLevel ?? 0}!";
+                    ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                    PostToMessageSystem(senderName, locationName, toastText);
+                }
+                CareerUpgradesManager.Instance
+                    ?.IncrementApGrantedLevel("SpaceCenter/ResearchAndDevelopment");
+                return;
+            }
+
+            // Career-mode facility progressives (Career mode migration —
+            // notes/career_spike.md, plans/career_mode_migration.md §2.3).
+            // Distinct from the legacy "Progressive Launch Pad" (with space)
+            // and "Progressive R&D" handlers above, which drive the artificial
+            // tier system being removed in task #13.
+            if (CareerUpgradesManager.ItemNameToFacilityId.TryGetValue(
+                    itemName, out string facilityId))
+            {
+                int newLevel = CareerUpgradesManager.Instance
+                    ?.IncrementApGrantedLevel(facilityId) ?? 0;
+                if (showToast)
+                {
+                    toastText = $"AP: {itemName} -> Lv{newLevel + 1}";
                     ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
                     PostToMessageSystem(senderName, locationName, toastText);
                 }
@@ -332,6 +378,12 @@ namespace KSPArchipelago
         private readonly object sessionLock = new object();
         private ArchipelagoSession session;
         private MissionTracker missionTracker;
+        /// <summary>
+        /// Public accessor so career-mode managers can fire location checks
+        /// without re-implementing the AP-session plumbing. Returns null
+        /// until Start() runs.
+        /// </summary>
+        public MissionTracker Tracker => missionTracker;
         private bool gameLoaded = false;
         public Archipelago.APConsole Console { get; private set; }
 
@@ -351,10 +403,24 @@ namespace KSPArchipelago
         // Pending starting-body hand-off to the KSC bridge. HandleConnect
         // runs on a ThreadPool worker (the AP library's connect path),
         // but the bridge ultimately drives Unity GameObject cloning via
-        // KK — segfaults if called off the main thread. Stash the body
-        // here from HandleConnect; Update() drains and invokes the
-        // bridge on the main thread.
-        private string _pendingBridgeBody = null;
+        // KK — segfaults if called off the main thread. Stash the body +
+        // its KSC site row here from HandleConnect; Update() drains and
+        // invokes the bridge on the main thread. Bundled into one object
+        // so the Interlocked.Exchange publishes name and coordinates
+        // atomically across the two threads.
+        private sealed class PendingStartingBody
+        {
+            public readonly string Name;
+            public readonly double Lat, Lon, TerrainAlt;
+            public readonly bool SkipMapDecal;
+            public PendingStartingBody(string name, double lat, double lon,
+                                       double terrainAlt, bool skipMapDecal)
+            {
+                Name = name; Lat = lat; Lon = lon;
+                TerrainAlt = terrainAlt; SkipMapDecal = skipMapDecal;
+            }
+        }
+        private PendingStartingBody _pendingBridge = null;
 
         // Pending science_values hand-off. Set by HandleConnect on a
         // worker thread; Update() drains, validates, and applies on the
@@ -364,11 +430,15 @@ namespace KSPArchipelago
         // body or situation field — no silent defaults.
         private Dictionary<string, Dictionary<string, float>> _pendingScienceValues = null;
         private bool _scienceValuesPending = false;
-        // Always trigger one snapshot+log per connect, even for Kerbin-home
-        // seeds with no science_values payload. Drives the diagnostic dump
-        // ("STOCK ScienceValues" in KSP.log) used to verify hardcoded
-        // bodies.py values against the live KSP install.
+        // Always take one stock-values snapshot per connect, even for
+        // Kerbin-home seeds with no science_values payload, so Reset() can
+        // restore stock values on disconnect.
         private bool _stockSnapshotPending = false;
+
+        // Pending career-hack directives parsed from slot_data on the connect
+        // worker thread. Update() drains and applies them on the main thread
+        // (CareerHackManager touches Funding/Reputation/facility singletons).
+        private volatile CareerDirectives _pendingCareerDirectives = null;
 
         // Slot data from AP server.
         public int Goal { get; private set; }
@@ -619,6 +689,9 @@ namespace KSPArchipelago
         // Track the last processed index for fast incremental polling.
         private int _lastProcessedIndex = 0;
 
+        // Throttle counter for the periodic contract reconcile (see Update()).
+        private int _reconcileFrame = 0;
+
         private void Start()
         {
             DontDestroyOnLoad(this);
@@ -635,6 +708,20 @@ namespace KSPArchipelago
 
             GameEvents.onGameStateLoad.Add(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
             GameEvents.onGameSceneLoadRequested.Add(OnSceneChange);
+            GameEvents.onLevelWasLoadedGUIReady.Add(OnLevelLoadedGUIReady);
+        }
+
+        // The scene is fully up (GUI ready) — ContractSystem has finished
+        // loading from the save, so it's now safe to add/accept contracts.
+        // Update() reconciles while this stays true; it's cleared the instant a
+        // scene transition is requested so we never touch ContractSystem
+        // mid-load (that race clobbered force-offered contracts).
+        private volatile bool _sceneReady = false;
+
+        private void OnLevelLoadedGUIReady(GameScenes scene)
+        {
+            _sceneReady = true;
+            if (session != null) Contracts.ApContractManager.ReconcileOffers();
         }
 
         private void Update()
@@ -660,31 +747,40 @@ namespace KSPArchipelago
             // Drain pending bridge invocation set by HandleConnect on
             // a worker thread. Materialiser ultimately clones Unity
             // GameObjects, which must happen on the main thread.
-            string bridgeBody = System.Threading.Interlocked.Exchange(
-                ref _pendingBridgeBody, null);
-            if (bridgeBody != null && bridgeBody != "Kerbin")
+            PendingStartingBody bridge = System.Threading.Interlocked.Exchange(
+                ref _pendingBridge, null);
+            if (bridge != null && !string.IsNullOrEmpty(bridge.Name) && bridge.Name != "Kerbin")
             {
                 IStartingBodyHandler bodyHandler = StartingBodyBridge.Current;
                 if (bodyHandler != null)
                 {
-                    bodyHandler.OnStartingBodyResolved(bridgeBody);
+                    bodyHandler.OnStartingBodyResolved(
+                        bridge.Name, bridge.Lat, bridge.Lon,
+                        bridge.TerrainAlt, bridge.SkipMapDecal);
                 }
                 else
                 {
                     EnqueueUserToast(
-                        $"AP: starting_body={bridgeBody} but Kerbal Konstructs not " +
+                        $"AP: starting_body={bridge.Name} but Kerbal Konstructs not " +
                         "installed — alien start disabled. Install KK and reconnect.");
                     Debug.LogError(
-                        $"[KSP-AP] starting_body={bridgeBody} requires KK; " +
+                        $"[KSP-AP] starting_body={bridge.Name} requires KK; " +
                         "no IStartingBodyHandler registered (KSPArchipelago.KSC.dll " +
                         "absent or failed to load — typically KerbalKonstructs.dll missing).");
                 }
             }
 
-            // One-shot stock snapshot + diagnostic log. Always fires
-            // once per connect, even for Kerbin-home seeds, so KSP.log
-            // contains the "STOCK ScienceValues" dump for verifying
-            // hardcoded bodies.py values.
+            // Drain pending career-hack directives parsed by HandleConnect on
+            // a worker thread. CareerHackManager touches Funding/Reputation/
+            // facility singletons, which must run on the main thread.
+            CareerDirectives careerDirectives = System.Threading.Interlocked.Exchange(
+                ref _pendingCareerDirectives, null);
+            if (careerDirectives != null)
+                CareerHackManager.Instance?.Apply(careerDirectives);
+
+            // One-shot stock-values snapshot. Always fires once per connect,
+            // even for Kerbin-home seeds, so Reset() can restore stock
+            // science values on disconnect.
             if (_stockSnapshotPending)
             {
                 if (ScienceScaling.PrepareSnapshot())
@@ -750,6 +846,15 @@ namespace KSPArchipelago
                 ProcessNewItems();
             }
 
+            // Offer + accept owed contracts once the scene is fully up
+            // (ContractSystem loaded). Throttled — immediacy on scene entry comes
+            // from OnLevelLoadedGUIReady; this is just the periodic catch-up, and
+            // it walks the contract list, so we don't want it every frame.
+            if (session != null && _sceneReady && (++_reconcileFrame % 30) == 0)
+            {
+                Contracts.ApContractManager.ReconcileOffers();
+            }
+
             missionTracker?.Update();
 
             if (!_goalSent && session != null && missionTracker != null && missionTracker.IsGoalMet())
@@ -786,6 +891,14 @@ namespace KSPArchipelago
             RDLevel = 0;
             _progressiveCounts = new Dictionary<string, int>();
             _receivedParts = new HashSet<string>();
+            // Career-mode facility levels are progressive state too. If we
+            // don't zero them here, ProcessAllItems re-walking
+            // AllItemsReceived (called on _needsReset from VAB entry/exit
+            // via onGameStateLoad) will IncrementApGrantedLevel for every
+            // already-awarded item, double-counting each one. Symptom:
+            // visiting the VAB after receiving a Progressive Launch Pad
+            // bumps the pad to level 3 on the way back to SC.
+            CareerUpgradesManager.Instance?.ResetApGrantedLevels();
         }
 
         /// <summary>
@@ -893,6 +1006,24 @@ namespace KSPArchipelago
                 session = newSession;
                 var sd = loginData.SlotData;
 
+                // Career is mandatory — contracts and the hacked economy only
+                // exist in Career mode. Reject a non-Career save unless the
+                // sandbox-testing bypass env var is set. The connect button is
+                // only enabled in SpaceCenter, so CurrentGame is reliably set.
+                bool allowSandbox = !string.IsNullOrEmpty(
+                    Environment.GetEnvironmentVariable("KSP_AP_ALLOW_SANDBOX"));
+                if (!allowSandbox
+                    && HighLogic.CurrentGame != null
+                    && HighLogic.CurrentGame.Mode != Game.Modes.CAREER)
+                {
+                    _slotDataError = "This AP seed requires a Career save. Start a "
+                        + "Career game and reconnect (or set KSP_AP_ALLOW_SANDBOX "
+                        + "to test in sandbox).";
+                    session = null;
+                    ConnectedSlot = null;
+                    return;
+                }
+
                 // --- Validate required slot_data keys up front ---
                 var missing = new List<string>();
 
@@ -901,6 +1032,27 @@ namespace KSPArchipelago
                 if (Difficulty < 0) missing.Add("difficulty");
                 if (sd.TryGetValue("starting_body", out object sbObj))
                     StartingBody = (string)sbObj;
+
+                // KSC site row for an alien starting body: the chosen body's
+                // landing coordinate (lat/lon/terrain alt) + map-decal flag.
+                // The client no longer carries a per-body table — it
+                // materialises the alien KSC from this. Required whenever
+                // starting_body isn't Kerbin; Kerbin uses the stock KSC and
+                // sends no row.
+                bool alienStart = StartingBody != null && StartingBody != "Kerbin";
+                double kscLat = 0, kscLon = 0, kscAlt = 0;
+                bool kscSkipDecal = false;
+                if (sd.TryGetValue("ksc_site", out object kscObj) && kscObj is JObject kscJo)
+                {
+                    kscLat = kscJo.Value<double>("lat");
+                    kscLon = kscJo.Value<double>("lon");
+                    kscAlt = kscJo.Value<double>("terrain_alt");
+                    kscSkipDecal = kscJo.Value<bool?>("skip_decal") ?? false;
+                }
+                else if (alienStart)
+                {
+                    missing.Add("ksc_site");
+                }
 
                 // Hard-fail when the seed wants an alien starting body
                 // but KK isn't installed.  Bridge.Current is null only
@@ -926,12 +1078,13 @@ namespace KSPArchipelago
                     return;
                 }
 
-                // Hand the body to KSPArchipelago.KSC.dll (if installed)
-                // via the main-thread drain in Update(). HandleConnect
-                // runs on a ThreadPool worker, but the bridge ends up
-                // calling KK → UnityEngine.Object.Internal_CloneSingle,
+                // Hand the body + its site row to KSPArchipelago.KSC.dll (if
+                // installed) via the main-thread drain in Update().
+                // HandleConnect runs on a ThreadPool worker, but the bridge
+                // ends up calling KK → UnityEngine.Object.Internal_CloneSingle,
                 // which segfaults off-thread.
-                _pendingBridgeBody = StartingBody;
+                _pendingBridge = new PendingStartingBody(
+                    StartingBody, kscLat, kscLon, kscAlt, kscSkipDecal);
 
                 TechSlotsPerNode = sd.TryGetValue("tech_slots_per_node", out object tsObj)
                     ? Convert.ToInt32(tsObj) : -1;
@@ -939,6 +1092,44 @@ namespace KSPArchipelago
 
                 if (!KSPArchipelagoPartsManager.SetSciencePacksFromSlotData(sd))
                     missing.Add("science_packs");
+
+                // Contracts-as-items + hacked career. Two slot_data blocks the
+                // dumb client actuates verbatim:
+                //   - career:    facility levels + infinite funds/rep +
+                //                unlimited contracts (always emitted).
+                //   - contracts: the contract manifest (item→spec); empty
+                //                array is valid (a seed with no contracts).
+                // Career directives are applied on the main thread in Update()
+                // (they touch KSP singletons). Parse into a local and only
+                // publish to _pendingCareerDirectives on the success path below,
+                // so an abort on a later missing key never hacks the economy.
+                CareerDirectives careerDirectives = null;
+                try
+                {
+                    if (sd.TryGetValue("career", out object careerObj)
+                        && careerObj is JObject careerJo)
+                    {
+                        careerDirectives = CareerDirectives.Parse(careerJo);
+                    }
+                    else missing.Add("career");
+
+                    var contractsTok = sd.TryGetValue("contracts", out object cObj)
+                        ? cObj as Newtonsoft.Json.Linq.JToken : null;
+                    var contractSpecs = Contracts.ContractSlotSpec.ParseAll(contractsTok);
+                    // Fail fast on client/server schema drift — reject the
+                    // connect rather than silently strand a contract's location.
+                    foreach (var spec in contractSpecs)
+                        Contracts.Primitives.ContractPrimitiveRegistry.ValidateSpec(spec);
+                    Contracts.ApContractManager.SetSpecs(contractSpecs);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"[KSP-AP] contracts slot_data parse failed: {ex}");
+                    _slotDataError = "contracts slot_data parse error: " + ex.Message;
+                    session = null;
+                    ConnectedSlot = null;
+                    return;
+                }
 
                 // Optional: home-relative science values. Absent for
                 // Kerbin home (server only emits when home != Kerbin).
@@ -1079,6 +1270,10 @@ namespace KSPArchipelago
                     return;
                 }
 
+                // Connect is committed past all abort paths — publish the
+                // career directives for the main-thread drain in Update().
+                _pendingCareerDirectives = careerDirectives;
+
                 // Parse goal location sentinels from slot data.
                 var goalLocNames = new List<string>();
                 if (sd.TryGetValue("goal_locations", out object glObj) && glObj is JArray glArr)
@@ -1118,6 +1313,9 @@ namespace KSPArchipelago
                 _pendingScienceValues = null;
                 _scienceValuesPending = false;
                 _stockSnapshotPending = false;
+                _pendingCareerDirectives = null;
+                // Stop hacking funds/rep/contract-cap; player keeps what they have.
+                CareerHackManager.Instance?.Reset();
             }
         }
 
@@ -1139,6 +1337,11 @@ namespace KSPArchipelago
 
         private void OnSceneChange(GameScenes scene)
         {
+            // A scene load was requested — the current ContractSystem is about
+            // to tear down/reload. Stop reconciling until the new scene's GUI
+            // is ready, so we never add a contract into a half-loaded system.
+            _sceneReady = false;
+
             if (scene == GameScenes.MAINMENU && IsConnected)
             {
                 Debug.Log("[KSP-AP] Returning to main menu — disconnecting.");
@@ -1150,6 +1353,7 @@ namespace KSPArchipelago
         {
             GameEvents.onGameStateLoad.Remove(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
             GameEvents.onGameSceneLoadRequested.Remove(OnSceneChange);
+            GameEvents.onLevelWasLoadedGUIReady.Remove(OnLevelLoadedGUIReady);
             missionTracker?.Destroy();
         }
     }

@@ -36,6 +36,20 @@ namespace KSPArchipelago
                 node.AddValue("tierLockMode", mod.SnapshotTierLockModeForSave());
             if (PendingLocationNames.Count > 0)
                 node.AddValue("pendingLocations", string.Join("|", PendingLocationNames));
+
+            // Career-mode facility AP-granted levels. Per-facility key=value
+            // pairs joined by '|' so a save with no Career-mode state stays
+            // compatible (the field is omitted if empty).
+            if (CareerUpgradesManager.Instance != null)
+            {
+                var snap = CareerUpgradesManager.Instance.SnapshotApGrantedLevels();
+                var pairs = new List<string>(snap.Count);
+                foreach (var kv in snap)
+                    if (kv.Value > 0)
+                        pairs.Add($"{kv.Key}={kv.Value}");
+                if (pairs.Count > 0)
+                    node.AddValue("apGrantedLevels", string.Join("|", pairs.ToArray()));
+            }
         }
 
         public override void OnLoad(ConfigNode node)
@@ -62,6 +76,26 @@ namespace KSPArchipelago
                 foreach (string s in pendingRaw.Split('|'))
                     if (!string.IsNullOrEmpty(s))
                         PendingLocationNames.Add(s);
+
+            // Career-mode facility AP-granted levels. Hydrate
+            // CareerUpgradesManager state and apply SetLevel on the live
+            // facility instances. CareerUpgradesManager.SetApGrantedLevel
+            // both updates the tracker and calls SetLevel on the matching
+            // UpgradeableFacility, so the in-game state matches the save.
+            string apGrantedRaw = node.GetValue("apGrantedLevels");
+            if (!string.IsNullOrEmpty(apGrantedRaw)
+                && CareerUpgradesManager.Instance != null)
+            {
+                foreach (string pair in apGrantedRaw.Split('|'))
+                {
+                    if (string.IsNullOrEmpty(pair)) continue;
+                    int eq = pair.IndexOf('=');
+                    if (eq <= 0) continue;
+                    string facilityId = pair.Substring(0, eq);
+                    if (!int.TryParse(pair.Substring(eq + 1), out int level)) continue;
+                    CareerUpgradesManager.Instance.SetApGrantedLevel(facilityId, level);
+                }
+            }
         }
     }
 }

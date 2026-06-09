@@ -1,15 +1,14 @@
-// Hardcoded port of future_expansions/AP_KSC_Sites/generate.py.
+// Static geometry for the alien-KSC clone, ported from
+// future_expansions/AP_KSC_Sites/generate.py.  FACILITIES — the 9 Squad
+// KSC buildings, their metre offsets in the cluster's east/north frame,
+// vertical offsets, and intended world-heading.  Plus the decal/cluster
+// constants.  All of this is body-independent (cluster-relative), so it
+// lives baked in the client.
 //
-// BODIES — per-body cluster position picked from the AP_KSC_Probe
-// equator scan (see generate.py for picking rationale).  FACILITIES —
-// the 9 Squad KSC buildings, their meter offsets in the cluster's
-// east/north frame, vertical offsets, and intended world-heading.
-// Constants (decal radius, cluster offset, etc.) are also ported.
-//
-// When phase 3 lands, the BODIES lookup is replaced by reading a single
-// row from AP slot_data; everything else here stays put.
-
-using System.Collections.Generic;
+// The per-body landing coordinate (lat/lon/terrain alt + map-decal flag)
+// is NOT here: it arrives in slot_data as the `ksc_site` row for the
+// chosen starting body and is carried in as a BodySpec (see
+// KSPArchipelagoMod.HandleConnect → IStartingBodyHandler → ApplyServerBody).
 
 namespace KSPArchipelago.KSC
 {
@@ -24,8 +23,15 @@ namespace KSPArchipelago.KSC
 
     public struct FacilitySpec
     {
+        // L3 model name. Kept for backwards-compat — the materialiser strips
+        // the "_level_3" suffix to derive a ModelBase, then computes the
+        // actual KK model name from AP-granted level (see Materialiser.cs).
         public string Model;
         public string Label;
+        // KSP UpgradeableFacility id, e.g. "SpaceCenter/LaunchPad". Maps the
+        // facility spec to CareerUpgradesManager so the materialiser knows
+        // which AP-granted level to use for model selection.
+        public string FacilityId;
         public double EastM;      // cluster-frame east offset before re-centring
         public double NorthM;     // cluster-frame north offset before re-centring
         public double UpM;        // vertical offset preserving real Kerbin KSC heights
@@ -61,30 +67,6 @@ namespace KSPArchipelago.KSC
         // documentation reference.
         public const double R_KERBIN_M = 600000.0;
 
-        // 14 alien bodies.  Kerbin is intentionally omitted: it already
-        // has the stock KSC.  When AP_KSC_ACTIVE_BODY is unset or set to
-        // "Kerbin", the selector short-circuits and leaves stock alone.
-        public static readonly BodySpec[] BODIES = new[]
-        {
-            new BodySpec { Name = "Tylo",   Lat =   0.0, Lon =  -30.0, TerrainAltM =  588.2 },
-            new BodySpec { Name = "Moho",   Lat =   0.0, Lon =  163.0, TerrainAltM = 1055.0 },
-            new BodySpec { Name = "Pol",    Lat =   0.0, Lon = -112.0, TerrainAltM =  969.5 },
-            new BodySpec { Name = "Laythe", Lat =   0.0, Lon = -163.0, TerrainAltM =  731.8 },
-            new BodySpec { Name = "Dres",   Lat =   0.0, Lon = -164.0, TerrainAltM =  224.4 },
-            new BodySpec { Name = "Bop",    Lat =   0.0, Lon = -137.0, TerrainAltM = 6416.2 },
-            new BodySpec { Name = "Eeloo",  Lat =   0.0, Lon =  115.0, TerrainAltM = 1535.9 },
-            new BodySpec { Name = "Mun",    Lat =   0.0, Lon = -111.0, TerrainAltM = 2908.8 },
-            // Greater Flats is already perfectly flat — skip decal.
-            new BodySpec { Name = "Minmus", Lat =   0.0, Lon =  -17.0, TerrainAltM =    0.0, SkipMapDecal = true },
-            // Off-equator mesa: +536 m vs equator pick, thinner atmosphere
-            // helps Eve ascent.
-            new BodySpec { Name = "Eve",    Lat = -25.0, Lon = -159.0, TerrainAltM = 6140.0 },
-            new BodySpec { Name = "Ike",    Lat =   0.0, Lon =   73.0, TerrainAltM = 3179.0 },
-            new BodySpec { Name = "Vall",   Lat =   0.0, Lon =  -64.0, TerrainAltM = 1222.2 },
-            new BodySpec { Name = "Gilly",  Lat =   0.0, Lon =   30.0, TerrainAltM = 3925.5 },
-            new BodySpec { Name = "Duna",   Lat =   0.0, Lon =  -19.0, TerrainAltM =  417.9 },
-        };
-
         // Index FACILITIES[0] is LaunchPad.  KK auto-creates the
         // GroupCenter at the first PlaceStatic call's lat/lng, so
         // keeping LaunchPad first puts the group origin at the pad
@@ -92,29 +74,15 @@ namespace KSPArchipelago.KSC
         // building positions are absolute either way).
         public static readonly FacilitySpec[] FACILITIES = new[]
         {
-            new FacilitySpec { Model = "KSC_LaunchPad_level_3",               Label = "LaunchPad",        EastM =    0.00, NorthM =    0.00, UpM =  0.00, HeadingDeg = 90.4 },
-            new FacilitySpec { Model = "KSC_VehicleAssemblyBuilding_level_3", Label = "VAB",              EastM = -649.98, NorthM =    4.53, UpM = -0.53, HeadingDeg =  0.4 },
-            new FacilitySpec { Model = "KSC_MissionControl_level_3",          Label = "MissionControl",   EastM = -598.70, NorthM =  234.30, UpM = -0.50, HeadingDeg = 90.4 },
-            new FacilitySpec { Model = "KSC_TrackingStation_level_3",         Label = "TrackingStation",  EastM = -502.22, NorthM = -314.05, UpM = -0.53, HeadingDeg = 90.4 },
-            new FacilitySpec { Model = "KSC_SpaceplaneHangar_level_3",        Label = "SPH",              EastM = -798.17, NorthM =  265.38, UpM = -0.61, HeadingDeg = 90.4 },
-            new FacilitySpec { Model = "KSC_Runway_level_3",                  Label = "Runway",           EastM = -596.56, NorthM =  494.92, UpM = -0.49, HeadingDeg = 90.4 },
-            new FacilitySpec { Model = "KSC_ResearchAndDevelopment_level_3",  Label = "RandD",            EastM = -901.37, NorthM = -195.79, UpM = -0.69, HeadingDeg = 90.4 },
-            new FacilitySpec { Model = "KSC_AstronautComplex_level_3",        Label = "AstronautComplex", EastM = -949.54, NorthM =   64.36, UpM = -0.77, HeadingDeg = 90.4 },
-            new FacilitySpec { Model = "KSC_Administration_level_3",          Label = "Administration",   EastM =-1088.99, NorthM =   65.50, UpM = -0.84, HeadingDeg =  0.4 },
+            new FacilitySpec { Model = "KSC_LaunchPad_level_3",               Label = "LaunchPad",        FacilityId = "SpaceCenter/LaunchPad",              EastM =    0.00, NorthM =    0.00, UpM =  0.00, HeadingDeg = 90.4 },
+            new FacilitySpec { Model = "KSC_VehicleAssemblyBuilding_level_3", Label = "VAB",              FacilityId = "SpaceCenter/VehicleAssemblyBuilding", EastM = -649.98, NorthM =    4.53, UpM = -0.53, HeadingDeg =  0.4 },
+            new FacilitySpec { Model = "KSC_MissionControl_level_3",          Label = "MissionControl",   FacilityId = "SpaceCenter/MissionControl",         EastM = -598.70, NorthM =  234.30, UpM = -0.50, HeadingDeg = 90.4 },
+            new FacilitySpec { Model = "KSC_TrackingStation_level_3",         Label = "TrackingStation",  FacilityId = "SpaceCenter/TrackingStation",        EastM = -502.22, NorthM = -314.05, UpM = -0.53, HeadingDeg = 90.4 },
+            new FacilitySpec { Model = "KSC_SpaceplaneHangar_level_3",        Label = "SPH",              FacilityId = "SpaceCenter/SpaceplaneHangar",       EastM = -798.17, NorthM =  265.38, UpM = -0.61, HeadingDeg = 90.4 },
+            new FacilitySpec { Model = "KSC_Runway_level_3",                  Label = "Runway",           FacilityId = "SpaceCenter/Runway",                 EastM = -596.56, NorthM =  494.92, UpM = -0.49, HeadingDeg = 90.4 },
+            new FacilitySpec { Model = "KSC_ResearchAndDevelopment_level_3",  Label = "RandD",            FacilityId = "SpaceCenter/ResearchAndDevelopment", EastM = -901.37, NorthM = -195.79, UpM = -0.69, HeadingDeg = 90.4 },
+            new FacilitySpec { Model = "KSC_AstronautComplex_level_3",        Label = "AstronautComplex", FacilityId = "SpaceCenter/AstronautComplex",       EastM = -949.54, NorthM =   64.36, UpM = -0.77, HeadingDeg = 90.4 },
+            new FacilitySpec { Model = "KSC_Administration_level_3",          Label = "Administration",   FacilityId = "SpaceCenter/Administration",         EastM =-1088.99, NorthM =   65.50, UpM = -0.84, HeadingDeg =  0.4 },
         };
-
-        public static bool TryFindBody(string name, out BodySpec spec)
-        {
-            foreach (var b in BODIES)
-            {
-                if (b.Name == name)
-                {
-                    spec = b;
-                    return true;
-                }
-            }
-            spec = default(BodySpec);
-            return false;
-        }
     }
 }

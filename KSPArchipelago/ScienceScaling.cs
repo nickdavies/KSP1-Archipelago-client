@@ -127,25 +127,10 @@ namespace KSPArchipelago
             }
             _snapshotTaken = true;
             Debug.Log($"[KSP-AP] ScienceScaling: snapshotted stock values for {_snapshot.Count} bodies");
-
-            // Diagnostic dump — grep KSP.log for "STOCK ScienceValues" to
-            // compare against the hardcoded values in bodies.py.  Fires
-            // once per session, before any AP overrides are applied.
-            Debug.Log("[KSP-AP] STOCK ScienceValues dump (verify vs bodies.py):");
-            foreach (var kv in _snapshot)
-            {
-                var v = kv.Value;
-                Debug.Log(
-                    $"[KSP-AP] STOCK ScienceValues  {kv.Key,-10} "
-                    + $"land={v.LandedDataValue} splash={v.SplashedDataValue} "
-                    + $"flyLo={v.FlyingLowDataValue} flyHi={v.FlyingHighDataValue} "
-                    + $"spaceLo={v.InSpaceLowDataValue} spaceHi={v.InSpaceHighDataValue} "
-                    + $"recov={v.RecoveryValue}");
-            }
         }
 
         /// <summary>
-        /// Trigger the one-time stock-values snapshot + diagnostic log.
+        /// Trigger the one-time stock-values snapshot.
         /// Returns false if FlightGlobals.Bodies isn't populated yet;
         /// caller is expected to retry on the next Update().  Safe to
         /// call from any AP-connect path, including Kerbin-home seeds

@@ -15,12 +15,14 @@ namespace KSPArchipelago
     public interface IStartingBodyHandler
     {
         // Called from KSPArchipelagoMod.HandleConnect after slot_data
-        // parse. Implementation must be idempotent — HandleConnect can
-        // run more than once per session if the player reconnects. The
-        // implementation is responsible for stashing the spec into its
-        // own ScenarioModule for save-time persistence and (when a
-        // scene is loaded) triggering materialisation.
-        void OnStartingBodyResolved(string bodyName);
+        // parse, with the chosen body's KSC site row (landing coordinate +
+        // map-decal flag) straight from slot_data. Implementation must be
+        // idempotent — HandleConnect can run more than once per session if
+        // the player reconnects. The implementation is responsible for
+        // stashing the spec into its own ScenarioModule for save-time
+        // persistence and (when a scene is loaded) triggering materialisation.
+        void OnStartingBodyResolved(string bodyName, double lat, double lon,
+                                    double terrainAlt, bool skipMapDecal);
     }
 
     public static class StartingBodyBridge

@@ -47,8 +47,18 @@ namespace KSPArchipelago.KSC
             return false;
         }
 
-        public void OnStartingBodyResolved(string bodyName)
+        public void OnStartingBodyResolved(string bodyName, double lat, double lon,
+                                           double terrainAlt, bool skipMapDecal)
         {
+            BodySpec spec = new BodySpec
+            {
+                Name         = bodyName,
+                Lat          = lat,
+                Lon          = lon,
+                TerrainAltM  = terrainAlt,
+                SkipMapDecal = skipMapDecal,
+            };
+
             SelectorScenarioModule sm = SelectorScenarioModule.Instance;
             if (sm == null)
             {
@@ -57,10 +67,10 @@ namespace KSPArchipelago.KSC
                 // the next SelectorScenarioModule.OnLoad consumes it.
                 Debug.Log($"[KSPArchipelago.KSC] OnStartingBodyResolved({bodyName}) " +
                           "before any scenario module — stashing for next OnLoad.");
-                SelectorScenarioModule.PendingBodyName = bodyName;
+                SelectorScenarioModule.PendingSpec = spec;
                 return;
             }
-            sm.ApplyServerBody(bodyName);
+            sm.ApplyServerBody(spec);
         }
 
         // Kick the decoration-placement coroutine.  Hosted here (not on

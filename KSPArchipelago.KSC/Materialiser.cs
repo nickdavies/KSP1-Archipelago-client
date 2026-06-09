@@ -47,6 +47,20 @@ namespace KSPArchipelago.KSC
         // materialisation in this KSP session.
         public static string CurrentBody = null;
 
+        // True once the starting body for THIS save is known — either
+        // loaded from save data (SelectorScenarioModule.OnLoad found a
+        // BodyName) or AP has called ApplyServerBody. Until then,
+        // LiveLimitsSync hides stock Kerbin pads preemptively so a
+        // fresh-Career-save player can't click-launch from Kerbin in the
+        // window between SC entry and AP connect.
+        //
+        // Root cause (Career mode regression, logged t=214 in the May 30
+        // session): KK CareerState.FixKSCFacilities runs on Career save
+        // load and resets stock LaunchPad/Runway editorFacility back to
+        // VAB/SPH. Materialiser doesn't run until AP connect (~10s later).
+        // During that gap, stock click-launch is live.
+        public static bool ApHomeConfirmed = false;
+
         // The GroupCenter our buildings were placed under.  Used by
         // the bootstrap coroutine to drive decoration placement after
         // a delay (see SelectorBootstrap.WaitForScenarioAndMaterialise).
@@ -60,6 +74,7 @@ namespace KSPArchipelago.KSC
             if (spec.Name == "Kerbin")
             {
                 RestoreStockKerbinLaunchSites();
+                SetDefaultLaunchSitesForBody("Kerbin");
                 CurrentBody = "Kerbin";
                 return;
             }
@@ -131,6 +146,12 @@ namespace KSPArchipelago.KSC
             RegisterAlienLaunchSites(spec);
             CurrentBody = spec.Name;     // HideKerbinLaunchSites reads this
             HideKerbinLaunchSites();
+            // Click-on-Kerbin-LaunchPad in SC routes through
+            // LaunchSiteFacility.showShipSelection → setLaunchSite(
+            // HighLogic.CurrentGame.defaultVABLaunchSite). Default is
+            // "LaunchPad". Setting it to the alien pad here makes the
+            // click launch from Duna/etc. instead of stock Kerbin.
+            SetDefaultLaunchSitesForBody(spec.Name);
             // SetDefaultLaunchSite is deferred to EditorLaunchGate — calling
             // it here NREs because LaunchSiteManager.setLaunchSite writes to
             // EditorLogic.fetch.launchSiteName, and EditorLogic only exists
@@ -322,19 +343,19 @@ namespace KSPArchipelago.KSC
         }
 
         // Locate the alien TrackingStation building's gameObject transform.
-        // PlaceFacilities placed it as a StaticInstance on `body` using
-        // model name "KSC_TrackingStation_level_3"; gameObject.name is
-        // assigned by KK as `{groupname}_{modelname}_{idx}`, so we match
-        // on substring.
+        // PlaceFacilities places it as a StaticInstance on `body` using
+        // model "KSC_TrackingStation_level_<N>" where N tracks the
+        // AP-granted level (1/2/3). Match on the level-agnostic base name
+        // so subsequent UpdateAlienFacilityModel swaps don't break this.
         private static Transform FindAlienTrackingStationTransform(CelestialBody body)
         {
-            const string MODEL = "KSC_TrackingStation_level_3";
+            const string MODEL_BASE_PREFIX = "KSC_TrackingStation_level_";
             foreach (StaticInstance inst in StaticDatabase.GetAllStatics())
             {
                 if (inst == null || inst.CelestialBody == null) continue;
                 if (inst.CelestialBody.name != body.name) continue;
                 if (inst.gameObject == null) continue;
-                if (inst.gameObject.name != null && inst.gameObject.name.Contains(MODEL))
+                if (inst.gameObject.name != null && inst.gameObject.name.Contains(MODEL_BASE_PREFIX))
                 {
                     return inst.gameObject.transform;
                 }
@@ -397,10 +418,16 @@ namespace KSPArchipelago.KSC
                 // compensates for the local-frame rotation.
                 double corrected = ((f.HeadingDeg - spec.Lon - 90.0) % 360.0 + 360.0) % 360.0;
 
-                StaticModel model = Reflection.GetModelByName(f.Model);
+                // Pick the KK model for the AP-granted level. KK indexes
+                // building models 1/2/3 (probe-confirmed; no _level_0 exists
+                // and stock career baseline = AP level 0 = KK _level_1).
+                // Falls back to the L3 model name if CareerUpgradesManager
+                // isn't available (e.g. Sandbox-mode load order edge case).
+                string modelName = SelectModelNameForLevel(f);
+                StaticModel model = Reflection.GetModelByName(modelName);
                 if (model == null)
                 {
-                    Debug.LogError($"[KSPArchipelago.KSC] Model {f.Model} not found in StaticDatabase");
+                    Debug.LogError($"[KSPArchipelago.KSC] Model {modelName} not found in StaticDatabase");
                     continue;
                 }
 
@@ -455,24 +482,44 @@ namespace KSPArchipelago.KSC
         // spawns.
         private static void RegisterAlienLaunchSites(BodySpec spec)
         {
-            RegisterOne(spec, "KSC_LaunchPad_level_3", "LaunchPad",
-                "LaunchPad_spawn", SiteType.VAB, LaunchSiteCategory.RocketPad);
-            RegisterOne(spec, "KSC_Runway_level_3", "Runway",
-                "End09/SpawnPoint", SiteType.SPH, LaunchSiteCategory.Runway);
+            // VAB-built rockets use isVAB=true for the GameVariables mass cap
+            // query; runway-launched planes use isVAB=false. modelBaseName is
+            // a prefix — PlaceFacilities may have spawned _level_1/2/3 depending
+            // on the AP-granted level, so we match by base.
+            RegisterOne(spec, "KSC_LaunchPad", "LaunchPad",
+                "LaunchPad_spawn", SiteType.VAB, LaunchSiteCategory.RocketPad,
+                facilityId: "SpaceCenter/LaunchPad", isVAB: true);
+            RegisterOne(spec, "KSC_Runway", "Runway",
+                "End09/SpawnPoint", SiteType.SPH, LaunchSiteCategory.Runway,
+                facilityId: "SpaceCenter/Runway", isVAB: false);
         }
 
-        private static void RegisterOne(BodySpec spec, string modelName, string siteSuffix,
-            string padTransform, SiteType kind, LaunchSiteCategory category)
+        private static void RegisterOne(BodySpec spec, string modelBaseName, string siteSuffix,
+            string padTransform, SiteType kind, LaunchSiteCategory category,
+            string facilityId, bool isVAB)
         {
-            StaticInstance inst = FindInstanceOnBody(spec.Name, modelName);
+            // Match by base name + "_level_" — finds the instance regardless
+            // of which level (_level_1/2/3) was spawned. This keeps the
+            // registration robust through PlaceFacilities AP-level selection
+            // AND any subsequent UpdateAlienFacilityModel swaps.
+            StaticInstance inst = FindInstanceOnBodyByBaseName(spec.Name, modelBaseName);
             if (inst == null)
             {
-                Debug.LogError($"[KSPArchipelago.KSC] No placed instance for {modelName} on {spec.Name}");
+                Debug.LogError($"[KSPArchipelago.KSC] No placed instance matching '{modelBaseName}_level_*' on {spec.Name}");
                 return;
             }
 
             CelestialBody body = FlightGlobals.GetBodyByName(spec.Name);
             string siteName = $"{spec.Name} {siteSuffix}";
+
+            // Career-mode pad mass cap: KK's MaxCraftMass is the gate
+            // (LaunchSiteChecks.cs:197). 0f means unlimited. We compute the
+            // cap from the AP-granted facility level via GameVariables —
+            // which honours the APCareerGameVariables override (validated in
+            // notes/career_spike.md). For Kerbin starts (where the materialiser
+            // never runs alien-pad construction), the override class still
+            // shapes the editor display.
+            float maxCraftMass = ComputeMaxCraftMass(facilityId, isVAB);
 
             KKLaunchSite site = new KKLaunchSite
             {
@@ -484,6 +531,7 @@ namespace KSPArchipelago.KSC
                 staticInstance     = inst,
                 LaunchSiteAuthor   = "KSPArchipelago.KSC",
                 LaunchSiteDescription = $"{siteSuffix} on {spec.Name}.",
+                MaxCraftMass       = maxCraftMass,
             };
             site.isOpen = true;
 
@@ -491,6 +539,242 @@ namespace KSPArchipelago.KSC
             inst.launchSite    = site;
 
             LaunchSiteManager.RegisterLaunchSite(site);
+
+            Debug.Log($"[KSPArchipelago.KSC] Registered launch site '{siteName}' "
+                    + $"MaxCraftMass={maxCraftMass:F1}t (facility='{facilityId}')");
+        }
+
+        /// <summary>
+        /// Build the KK model name for a facility at its current AP-granted
+        /// level. Strips the "_level_3" suffix off the spec's L3 name, then
+        /// appends the right level. KK levels are 1-indexed (no _level_0).
+        /// </summary>
+        public static string SelectModelNameForLevel(FacilitySpec f)
+        {
+            const string L3Suffix = "_level_3";
+            string baseName = f.Model;
+            if (baseName != null && baseName.EndsWith(L3Suffix))
+                baseName = baseName.Substring(0, baseName.Length - L3Suffix.Length);
+            int apLevel = 0;
+            try
+            {
+                var mgr = KSPArchipelago.CareerUpgradesManager.Instance;
+                if (mgr != null && !string.IsNullOrEmpty(f.FacilityId))
+                    apLevel = mgr.GetApGrantedLevel(f.FacilityId);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError("[KSPArchipelago.KSC] SelectModelNameForLevel lookup failed "
+                             + $"for '{f.FacilityId}': {ex}");
+            }
+            // KK level = AP level + 1 (KK 1/2/3 maps to FacilityLevel 0/1/2).
+            int kkLevel = System.Math.Min(System.Math.Max(apLevel + 1, 1), 3);
+            return baseName + "_level_" + kkLevel;
+        }
+
+        /// <summary>
+        /// Look up the FacilitySpec by FacilityId. Returns default(FacilitySpec)
+        /// with FacilityId=null if not found.
+        /// </summary>
+        public static FacilitySpec GetFacilitySpecById(string facilityId)
+        {
+            foreach (var f in BodyData.FACILITIES)
+                if (f.FacilityId == facilityId) return f;
+            return default(FacilitySpec);
+        }
+
+        /// <summary>
+        /// Swap the model on a live alien-KSC StaticInstance to match the
+        /// current AP-granted level. Called from LiveLimitsSync on
+        /// OnKSCFacilityUpgraded events so the alien KSC visuals track
+        /// AP grants in real time.
+        ///
+        /// Identification: matches by `gameObject.name` prefix containing
+        /// "KSC_<baseName>_level_" — robust to either the original spawn
+        /// model or any model we've already swapped in.
+        /// </summary>
+        public static void UpdateAlienFacilityModel(string facilityId)
+        {
+            if (string.IsNullOrEmpty(facilityId)) return;
+            FacilitySpec spec = GetFacilitySpecById(facilityId);
+            if (spec.FacilityId == null) return;
+
+            string targetModelName = SelectModelNameForLevel(spec);
+            StaticModel targetModel = Reflection.GetModelByName(targetModelName);
+            if (targetModel == null)
+            {
+                Debug.LogError($"[KSPArchipelago.KSC] target model '{targetModelName}' "
+                             + $"not found for facility '{facilityId}'");
+                return;
+            }
+
+            const string L3Suffix = "_level_3";
+            string baseName = spec.Model;
+            if (baseName != null && baseName.EndsWith(L3Suffix))
+                baseName = baseName.Substring(0, baseName.Length - L3Suffix.Length);
+            string namePrefix = baseName + "_level_";  // matches any level variant
+
+            // DISABLED: runtime model swap is unsafe. The Despawn→Activate
+            // recipe falls into Spawn()→Destroy() on partial failure, which
+            // KK Destroy() implements by deleting the StaticInstance from
+            // the DB AND calling LaunchSiteManager.DeleteLaunchSite(...) on
+            // any attached launch site. Result: alien LaunchPad gets wiped,
+            // launches fall through to Kerbin's stock pad or bounce back to
+            // KSC.
+            //
+            // Even the no-Despawn variant (just SetStaticInstanceModel) is
+            // suspect — KK caches mesh refs in other systems (decals, GrassColor),
+            // so a bare model-field swap may produce a visually inconsistent
+            // state.
+            //
+            // For now: log the intended swap but DO NOTHING. Visual catches
+            // up on the next full materialisation (AP-disconnect + reconnect
+            // re-runs PlaceFacilities at the current AP-granted level).
+            int touched = 0;
+            foreach (StaticInstance inst in StaticDatabase.GetAllStatics())
+            {
+                if (inst == null || inst.gameObject == null) continue;
+                if (inst.CelestialBody == null
+                    || inst.CelestialBody.name == "Kerbin") continue;
+                if (inst.gameObject.name == null
+                    || !inst.gameObject.name.Contains(namePrefix)) continue;
+                if (inst.gameObject.name.Contains(targetModelName)) continue;
+                Debug.Log($"[KSPArchipelago.KSC] UpdateAlienFacilityModel: SKIP "
+                        + $"runtime swap on '{inst.gameObject.name}' "
+                        + $"-> {targetModelName} (facility='{facilityId}'). "
+                        + "Reason: KK runtime model swap is unsafe (destroys "
+                        + "launch sites). Visual will catch up on next "
+                        + "materialisation.");
+                touched++;
+            }
+            if (touched == 0)
+            {
+                Debug.Log($"[KSPArchipelago.KSC] UpdateAlienFacilityModel: no "
+                        + $"candidate instance for facility='{facilityId}' "
+                        + $"(prefix='{namePrefix}', target='{targetModelName}')");
+            }
+        }
+
+        // Facilities whose model swap was deferred because we weren't at
+        // SpaceCenter when the AP item arrived. Drained on next SC entry.
+        private static readonly System.Collections.Generic.HashSet<string>
+            _pendingFacilitySwaps = new System.Collections.Generic.HashSet<string>();
+
+        /// <summary>
+        /// Apply any model swaps that were deferred while the player was
+        /// outside SpaceCenter. Call from a Spawn scene-load handler — see
+        /// LiveLimitsSync.OnSceneChange.
+        /// </summary>
+        public static void DrainPendingFacilitySwaps()
+        {
+            if (_pendingFacilitySwaps.Count == 0) return;
+            if (HighLogic.LoadedScene != GameScenes.SPACECENTER)
+            {
+                // Caller may invoke during scene transition; only run when
+                // we've actually arrived.
+                return;
+            }
+            string[] facilities = new string[_pendingFacilitySwaps.Count];
+            _pendingFacilitySwaps.CopyTo(facilities);
+            _pendingFacilitySwaps.Clear();
+            Debug.Log($"[KSPArchipelago.KSC] Draining {facilities.Length} deferred "
+                    + "facility model swap(s) on SpaceCenter entry");
+            foreach (string facilityId in facilities)
+            {
+                try { UpdateAlienFacilityModel(facilityId); }
+                catch (System.Exception ex)
+                {
+                    Debug.LogError($"[KSPArchipelago.KSC] Deferred swap failed for "
+                                 + $"'{facilityId}': {ex}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Compute KKLaunchSite.MaxCraftMass from the AP-granted facility
+        /// level via GameVariables. Returns float.PositiveInfinity if the
+        /// computed value is infinite (which KK treats the same as 0f =
+        /// unlimited; we set 0f explicitly to match KK's convention).
+        /// </summary>
+        public static float ComputeMaxCraftMass(string facilityId, bool isVAB)
+        {
+            int level = 0;
+            try
+            {
+                // CareerUpgradesManager lives in the main mod; bridge via
+                // its public static Instance. Default to 0 if not yet
+                // initialised (Career scene boot ordering edge case).
+                var mgr = KSPArchipelago.CareerUpgradesManager.Instance;
+                if (mgr != null) level = mgr.GetApGrantedLevel(facilityId);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"[KSPArchipelago.KSC] ComputeMaxCraftMass: "
+                             + $"CareerUpgradesManager lookup failed for '{facilityId}': {ex}");
+            }
+            // KSP norm-level: 0=Lv1, 0.5=Lv2, 1.0=Lv3 (verified probe finding).
+            float normLevel = (float)level / (float)KSPArchipelago.CareerUpgradesManager.MaxLevel;
+            float cap = GameVariables.Instance.GetCraftMassLimit(normLevel, isVAB);
+            if (float.IsPositiveInfinity(cap) || cap >= float.MaxValue / 2f) return 0f;
+            return cap;
+        }
+
+        /// <summary>
+        /// Update MaxCraftMass on the live KK launch site (alien start only)
+        /// after an AP item grant changed the facility level. Called from
+        /// LiveLimitsSync via GameEvents.OnKSCFacilityUpgraded.
+        /// </summary>
+        public static void UpdateAlienPadMaxCraftMass(string facilityId)
+        {
+            if (string.IsNullOrEmpty(facilityId)) return;
+            bool isVAB = facilityId == "SpaceCenter/LaunchPad";
+            float newCap = ComputeMaxCraftMass(facilityId, isVAB);
+
+            // The materialiser placed our alien KK sites; iterate live
+            // StaticInstances on the active body and update MaxCraftMass on
+            // the matching launch site. Identifying by SiteSuffix is the
+            // robust route since spec.Name varies by save.
+            string suffix = facilityId.Substring(facilityId.LastIndexOf('/') + 1);
+            int touched = 0;
+            foreach (StaticInstance inst in StaticDatabase.GetAllStatics())
+            {
+                if (inst == null || inst.launchSite == null) continue;
+                if (inst.CelestialBody == null
+                    || inst.CelestialBody.name == "Kerbin") continue;
+                string name = inst.launchSite.LaunchSiteName ?? string.Empty;
+                if (!name.EndsWith(suffix)) continue;
+                inst.launchSite.MaxCraftMass = newCap;
+                Debug.Log($"[KSPArchipelago.KSC] Updated MaxCraftMass on "
+                        + $"'{name}' -> {newCap:F1}t (facility='{facilityId}')");
+                touched++;
+            }
+            if (touched == 0)
+            {
+                Debug.Log($"[KSPArchipelago.KSC] UpdateAlienPadMaxCraftMass: "
+                        + $"no alien site for facility='{facilityId}' (not materialised yet?)");
+            }
+        }
+
+        // Walk all placed instances and find the one matching (body, base name prefix).
+        // "Base name" is the model name without the "_level_N" suffix, so this
+        // matches whichever level variant (1/2/3) is currently placed. Use
+        // when we need to find an instance whose level can change at runtime
+        // (e.g. LaunchPad / Runway being model-swapped on AP item grants).
+        private static StaticInstance FindInstanceOnBodyByBaseName(string bodyName, string modelBaseName)
+        {
+            string namePrefix = modelBaseName + "_level_";
+            foreach (StaticInstance inst in StaticDatabase.GetAllStatics())
+            {
+                if (inst == null || inst.CelestialBody == null) continue;
+                if (inst.CelestialBody.name != bodyName) continue;
+                if (inst.gameObject == null) continue;
+                if (inst.gameObject.name != null
+                    && inst.gameObject.name.Contains(namePrefix))
+                {
+                    return inst;
+                }
+            }
+            return null;
         }
 
         // Walk all placed instances and find the one matching (body, model).
@@ -573,9 +857,111 @@ namespace KSPArchipelago.KSC
             setupValid?.Invoke(null, null);
         }
 
+        // Pre-AP-confirm guard. Sets editorFacility=None on the stock
+        // Kerbin LaunchPad/Runway AND disables Squad's LaunchSiteFacility
+        // component (the click-launch driver). Does NOT touch
+        // PSystemSetup.LaunchSites (MH sites stay registered so a
+        // Kerbin-start player can still use them once AP confirms) and
+        // does NOT call setupValidLaunchSites (no editor scene yet at SC
+        // entry, no picker cache to refresh).
+        //
+        // editorFacility=None alone is INSUFFICIENT — it only filters the
+        // VAB picker. The click-on-pad-in-SC path opens VesselSpawnDialog
+        // via LaunchSiteFacility and launches regardless of editorFacility.
+        // Observed 2026-05-30 (log: GetLaunchSiteByName: found LS: LaunchPad
+        // → Pre-Flight Check WrongVesselTypeForLaunchSite: PASS! → Launching
+        // vessel from LaunchPad) — happens after preflight hide ran.
+        //
+        // Safe to call repeatedly; idempotent.
+        public static void PreflightHideStockKerbinPads()
+        {
+            if (PSystemSetup.Instance == null) return;
+            foreach (PSystemSetup.SpaceCenterFacility entry in
+                     PSystemSetup.Instance.SpaceCenterFacilities)
+            {
+                if (entry == null) continue;
+                if (entry.facilityName == "LaunchPad"
+                    || entry.facilityName == "Runway")
+                {
+                    entry.editorFacility = EditorFacility.None;
+                }
+            }
+        }
+
+        // Toggle Squad's LaunchSiteFacility MonoBehaviour on the stock
+        // Kerbin LaunchPad and Runway GameObjects. LaunchSiteFacility is
+        // the click-launch driver: clicking the building in SC scene opens
+        // VesselSpawnDialog → spawns the chosen craft on this site. With
+        // it disabled, the click does nothing (or just opens the upgrade
+        // context menu via the UpgradeableFacility, which is a separate
+        // component on the root GameObject and is left intact).
+        public static void SetStockKerbinLaunchSiteFacilitiesEnabled(bool enabled)
+        {
+            int touched = 0;
+            foreach (var f in Resources.FindObjectsOfTypeAll<Upgradeables.UpgradeableFacility>())
+            {
+                if (f == null) continue;
+                if (f.name != "LaunchPad" && f.name != "Runway") continue;
+                // Must be on Kerbin — alien KSC clones live in different
+                // PQS/static instance scope and won't match this find.
+                // Still, be defensive: an alien KSC's LaunchSiteFacility
+                // belongs to KK, not Squad, and lives on a StaticInstance
+                // GameObject, not an UpgradeableFacility.
+                foreach (var mb in f.gameObject.GetComponentsInChildren<MonoBehaviour>(true))
+                {
+                    if (mb == null) continue;
+                    if (mb.GetType().Name != "LaunchSiteFacility") continue;
+                    if (mb.enabled != enabled)
+                    {
+                        mb.enabled = enabled;
+                        touched++;
+                    }
+                }
+            }
+            if (touched > 0)
+            {
+                Debug.Log($"[KSPArchipelago.KSC] LaunchSiteFacility enabled={enabled} "
+                        + $"applied to {touched} component(s) on stock Kerbin pads");
+            }
+        }
+
+        /// <summary>
+        /// Set HighLogic.CurrentGame.defaultVABLaunchSite / defaultSPHLaunchSite
+        /// to the launch sites that match the given home body. The stock
+        /// LaunchSiteFacility.OnClicked → showShipSelection → setLaunchSite
+        /// path reads these fields verbatim (decompiled from
+        /// Assembly-CSharp; LaunchSiteFacility:: showShipSelection sets
+        /// EditorDriver.setLaunchSite(HighLogic.CurrentGame.defaultVABLaunchSite)
+        /// then reads back launchSiteName = EditorDriver.SelectedLaunchSiteName).
+        /// So clicking the visible Kerbin LaunchPad model in SC scene
+        /// launches FROM whichever pad name is in defaultVABLaunchSite.
+        ///
+        /// For Kerbin home: stock "LaunchPad" / "Runway".
+        /// For alien home: "{Body} LaunchPad" / "{Body} Runway" (the names
+        /// our materialiser registered with KK).
+        ///
+        /// Re-applied on every SC entry in LiveLimitsSync.OnLevelLoaded
+        /// because KK CareerState and stock scene transitions can reset
+        /// it. Idempotent.
+        /// </summary>
+        public static void SetDefaultLaunchSitesForBody(string bodyName)
+        {
+            if (HighLogic.CurrentGame == null) return;
+            if (string.IsNullOrEmpty(bodyName) || bodyName == "Kerbin")
+            {
+                HighLogic.CurrentGame.defaultVABLaunchSite = "LaunchPad";
+                HighLogic.CurrentGame.defaultSPHLaunchSite = "Runway";
+            }
+            else
+            {
+                HighLogic.CurrentGame.defaultVABLaunchSite = bodyName + " LaunchPad";
+                HighLogic.CurrentGame.defaultSPHLaunchSite = bodyName + " Runway";
+            }
+        }
+
         // Restores stock Kerbin LaunchPad/Runway to their normal editor
-        // assignment.  Used when the chosen body is Kerbin.
-        private static void RestoreStockKerbinLaunchSites()
+        // assignment. Used when AP confirms a Kerbin start.
+        public static void RestoreStockKerbinLaunchSites()
         {
             foreach (PSystemSetup.SpaceCenterFacility entry in
                      PSystemSetup.Instance.SpaceCenterFacilities)

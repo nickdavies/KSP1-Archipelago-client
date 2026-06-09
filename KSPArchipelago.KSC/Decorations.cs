@@ -72,26 +72,147 @@ namespace KSPArchipelago.KSC
         // fired from MainMenu/FLIGHT).  Either way: loud failure, not silent.
         public const int MaxReadinessFrames = 600;
 
+        // Bodies whose decorations have already been placed this KSP session.
+        // SelectorBootstrap re-runs WaitForScenarioAndMaterialise on every
+        // SC scene entry; the MaterialisedThisSession guard in the bootstrap
+        // is unreliable because the ScenarioModule field gets reset between
+        // scenes (KSP serialization quirk — log shows "Loaded spec from save:
+        // Duna" + "Duna already materialised this session — skipping" on
+        // every scene entry, meaning Materialise short-circuits but
+        // WaitAndPlace fires anyway). Without this guard, AC flickers
+        // L1->L3->L1 on every SC entry as TryForceAcToL3 runs again, and
+        // Place may attempt duplicate-clone the FlagPole and Crawlerway.
+        private static readonly System.Collections.Generic.HashSet<string>
+            _placedForBodies = new System.Collections.Generic.HashSet<string>();
+
+        public static void ResetPlacedTracking()
+        {
+            _placedForBodies.Clear();
+        }
+
         // Single source of truth for the "wait-then-place" sequence.  Both
         // the SpaceCenter bootstrap and the AP-connect path host this on
         // their own MonoBehaviours.
         public static IEnumerator WaitAndPlace(BodySpec spec, CelestialBody body, GroupCenter groupCenter)
         {
-            int waited = 0;
-            while (!AreSourcesReady() && waited < MaxReadinessFrames)
+            if (_placedForBodies.Contains(spec.Name))
             {
-                yield return null;
-                waited++;
-            }
-            if (!AreSourcesReady())
-            {
-                Debug.LogError($"[KSPArchipelago.KSC] Decoration sources not ready after " +
-                               $"{MaxReadinessFrames} frames — skipping placement. " +
-                               "Likely caused by AP-connect outside SpaceCenter, or a KSC " +
-                               "scene-hierarchy change in a newer KSP version.");
+                // Already placed this session — no need to force AC to L3
+                // again. Prevents the AC mesh flicker on VAB/flight return.
                 yield break;
             }
-            Place(spec, body, groupCenter);
+
+            // FlagPole/Crawlerway decoration sources come from the live
+            // Kerbin KSC scene (FindACFlagSource at Decorations.cs requires
+            // the AC's currently-active facilityInstance to be the L3 prefab
+            // with the model01/Pole hierarchy). If the player has downgraded
+            // the AC (e.g. via AP CareerUpgradesManager), the source meshes
+            // for L3-only decorations vanish and AreSourcesReady never
+            // returns true.
+            //
+            // We temporarily force AC to L3 here so the existing decoration
+            // pipeline (unchanged) finds its sources, then restore after
+            // Place(). Validated mechanism — see notes/career_spike.md.
+            // SuppressPostRevert prevents CareerUpgradesManager's POST-revert
+            // observer from fighting the temporary SetLevel.
+            var (acFacility, origLevel) = TryForceAcToL3();
+            try
+            {
+                int waited = 0;
+                while (!AreSourcesReady() && waited < MaxReadinessFrames)
+                {
+                    yield return null;
+                    waited++;
+                }
+                if (!AreSourcesReady())
+                {
+                    Debug.LogError($"[KSPArchipelago.KSC] Decoration sources not ready after " +
+                                   $"{MaxReadinessFrames} frames — skipping placement. " +
+                                   "Likely caused by AP-connect outside SpaceCenter, or a KSC " +
+                                   "scene-hierarchy change in a newer KSP version.");
+                    yield break;
+                }
+                Place(spec, body, groupCenter);
+                _placedForBodies.Add(spec.Name);
+            }
+            finally
+            {
+                RestoreAcLevel(acFacility, origLevel);
+            }
+        }
+
+        // Returns (acFacility, origLevel). If the AC isn't findable or
+        // is already at L3, no change is made and the caller's finally
+        // will detect that via origLevel == -1.
+        private static System.Tuple<Upgradeables.UpgradeableFacility, int> TryForceAcToL3()
+        {
+            Upgradeables.UpgradeableFacility ac = null;
+            foreach (var f in Resources.FindObjectsOfTypeAll<Upgradeables.UpgradeableFacility>())
+            {
+                if (f != null && f.name == "AstronautComplex") { ac = f; break; }
+            }
+            if (ac == null)
+            {
+                Debug.LogWarning("[KSPArchipelago.KSC] AC facility not found — "
+                               + "cannot force L3 for decoration sources. "
+                               + "Place() may skip if AC was downgraded.");
+                return System.Tuple.Create<Upgradeables.UpgradeableFacility, int>(null, -1);
+            }
+            int origLevel = ac.FacilityLevel;
+            if (origLevel >= 2)
+            {
+                // Already at L3 (internal idx 2 = max) — no change needed,
+                // signal "nothing to restore" via origLevel = -1.
+                return System.Tuple.Create<Upgradeables.UpgradeableFacility, int>(ac, -1);
+            }
+            try
+            {
+                var mgr = KSPArchipelago.CareerUpgradesManager.Instance;
+                // Tell POST-revert to ignore facility-upgrade events for the
+                // AC until we see newLvl == origLevel (the post-restore state).
+                // That naturally covers both the intermediate L3 and the
+                // restore event, regardless of KSP's async coroutine timing.
+                if (mgr != null) mgr.ExpectStableLevel("SpaceCenter/AstronautComplex", origLevel);
+                ac.SetLevel(2);
+                Debug.Log($"[KSPArchipelago.KSC] Forced AC L{origLevel + 1} -> L3 "
+                        + "for decoration source extraction");
+                return System.Tuple.Create(ac, origLevel);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError("[KSPArchipelago.KSC] AC SetLevel(2) failed: " + ex);
+                var mgr = KSPArchipelago.CareerUpgradesManager.Instance;
+                if (mgr != null) mgr.ClearExpectedStableLevel("SpaceCenter/AstronautComplex");
+                return System.Tuple.Create<Upgradeables.UpgradeableFacility, int>(null, -1);
+            }
+        }
+
+        private static void RestoreAcLevel(Upgradeables.UpgradeableFacility ac, int origLevel)
+        {
+            // Note: the matching ExpectStableLevel(origLevel) was set in
+            // TryForceAcToL3 — POST-revert auto-clears when it observes the
+            // restore event. If no SetLevel runs here (origLevel was -1 or
+            // ac was null), the expectation entry won't auto-clear; force
+            // clear in the finally below to avoid leaking suppression state.
+            try
+            {
+                if (ac != null && origLevel >= 0)
+                {
+                    ac.SetLevel(origLevel);
+                    Debug.Log($"[KSPArchipelago.KSC] Restored AC -> L{origLevel + 1}");
+                }
+                else
+                {
+                    var mgr = KSPArchipelago.CareerUpgradesManager.Instance;
+                    if (mgr != null) mgr.ClearExpectedStableLevel("SpaceCenter/AstronautComplex");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError("[KSPArchipelago.KSC] AC SetLevel restore failed: " + ex);
+                var mgr = KSPArchipelago.CareerUpgradesManager.Instance;
+                if (mgr != null) mgr.ClearExpectedStableLevel("SpaceCenter/AstronautComplex");
+            }
         }
 
         // Deterministic readiness check for the scene state Decorations.Place
