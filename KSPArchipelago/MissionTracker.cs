@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 using Archipelago.MultiClient.Net;
@@ -90,7 +92,9 @@ namespace KSPArchipelago
                    v.vesselType != VesselType.Debris;
         }
 
-        private ArchipelagoSession session;
+        // volatile: assigned on the console thread (OnConnect/OnDisconnect),
+        // read on the main thread and the send worker.
+        private volatile ArchipelagoSession session;
         private HashSet<long> checkedLocationIds;
         private bool initialized = false;
         private bool eventsRegistered = false;
@@ -103,6 +107,42 @@ namespace KSPArchipelago
         // Locations detected while offline, queued for sending on reconnect.
         // Shared reference with ApScenarioModule for save/load persistence.
         private HashSet<string> pendingLocationNames = new HashSet<string>();
+
+        // Off-main-thread location sending. ReportLocation/FlushPending do the
+        // cheap bookkeeping on the calling thread and enqueue (id, name);
+        // SendWorker performs the actual websocket send so GameEvents handlers
+        // never block a frame on I/O. Failures flow back through _sendFailures
+        // and are applied in Update() — the worker never touches
+        // checkedLocationIds or pendingLocationNames (ApScenarioModule iterates
+        // the pending set raw during saves, so those sets must stay off the
+        // worker thread).
+        private BlockingCollection<SendRequest> _sendQueue =
+            new BlockingCollection<SendRequest>();
+        private readonly ConcurrentQueue<SendResult> _sendFailures =
+            new ConcurrentQueue<SendResult>();
+        private Thread _sendThread;
+
+        private sealed class SendRequest
+        {
+            public readonly long Id;
+            public readonly string Name;
+            public SendRequest(long id, string name) { Id = id; Name = name; }
+        }
+
+        // A failed send: carries the session the send was attempted on (null if
+        // disconnected) so the main thread can distinguish "this session is
+        // dead" from "a reconnect already replaced the session — just retry".
+        private sealed class SendResult
+        {
+            public readonly long Id;
+            public readonly string Name;
+            public readonly ArchipelagoSession Session;
+            public readonly string Error;
+            public SendResult(SendRequest req, ArchipelagoSession session, string error)
+            {
+                Id = req.Id; Name = req.Name; Session = session; Error = error;
+            }
+        }
 
         // Cached location IDs for hot-path guards (looked up once at init).
         private long homeFirstLaunchId, homeFirstStagingId,
@@ -163,6 +203,7 @@ namespace KSPArchipelago
                 eventsRegistered = true;
             }
 
+            EnsureSendWorker();
             FlushPending();
             ReportStartingInventory();
             initialized = true;
@@ -251,6 +292,10 @@ namespace KSPArchipelago
         /// <summary>Call on mod teardown to unregister KSP events.</summary>
         public void Destroy()
         {
+            // CompleteAdding before nulling session so the worker can drain
+            // already-queued sends on the live connection before exiting.
+            _sendQueue.CompleteAdding();
+            _sendThread = null;
             if (eventsRegistered)
             {
                 UnregisterEvents();
@@ -335,9 +380,13 @@ namespace KSPArchipelago
             return true;
         }
 
-        /// <summary>Call from MonoBehaviour.Update() for altitude polling.</summary>
+        /// <summary>
+        /// Call from MonoBehaviour.Update(). Applies send-worker failures on
+        /// the main thread and polls altitude milestones.
+        /// </summary>
         public void Update()
         {
+            DrainSendFailures();
             if (!initialized) return;
             PollHomeAltitude();
         }
@@ -460,25 +509,101 @@ namespace KSPArchipelago
             if (!checkedLocationIds.Add(id))
                 return; // already reported
 
-            try
+            // The websocket send happens on the send worker — doing it here
+            // would stall the frame (GameEvents handlers and the Update poll
+            // run on the main thread). Grant the local reward immediately —
+            // the player did the thing in game regardless of send outcome.
+            // If the send fails, DrainSendFailures rolls back the dedup add
+            // and queues the name for the reconnect flush.
+            GrantLocalReward(grantScience);
+            _sendQueue.Add(new SendRequest(id, name));
+        }
+
+        // Starts the send worker if it isn't running. Recreates the queue if a
+        // previous Destroy() completed it.
+        private void EnsureSendWorker()
+        {
+            if (_sendThread != null && _sendThread.IsAlive) return;
+            if (_sendQueue.IsAddingCompleted)
+                _sendQueue = new BlockingCollection<SendRequest>();
+            _sendThread = new Thread(SendWorker)
             {
-                s.Locations.CompleteLocationChecks(id);
-                GrantLocalReward(grantScience);
-                Debug.Log($"[KSP-AP] Checked: {name}");
-            }
-            catch (Exception ex)
+                IsBackground = true,
+                Name = "AP-LocationSender",
+            };
+            _sendThread.Start();
+        }
+
+        // Drains the send queue off the main thread. Batches whatever is
+        // immediately available into a single CompleteLocationChecks call
+        // (multi-slot body events and tech nodes queue several ids at once,
+        // which would otherwise be one websocket send each). Failures are
+        // reported back through _sendFailures and applied on the main thread.
+        private void SendWorker()
+        {
+            var batch = new List<SendRequest>();
+            while (true)
             {
-                // Send failed — likely socket closed but library hasn't fired
-                // SocketClosed yet. Roll back the dedup add so FlushPending can
-                // re-send after reconnect, queue the name, and notify the
-                // console so it starts the reconnect cycle. Still grant the
-                // local reward — the player did the thing in game.
-                Debug.LogWarning($"[KSP-AP] ReportLocation send failed for '{name}': {ex.Message}");
-                checkedLocationIds.Remove(id);
-                pendingLocationNames.Add(name);
-                GrantLocalReward(grantScience);
-                onSendFailed?.Invoke(ex.Message);
+                SendRequest first;
+                try { first = _sendQueue.Take(); }
+                catch (InvalidOperationException) { return; } // CompleteAdding + drained
+
+                batch.Clear();
+                batch.Add(first);
+                SendRequest extra;
+                while (_sendQueue.TryTake(out extra)) batch.Add(extra);
+
+                ArchipelagoSession s = session;
+                if (s == null)
+                {
+                    foreach (SendRequest req in batch)
+                        _sendFailures.Enqueue(new SendResult(req, null, "not connected"));
+                    continue;
+                }
+
+                var ids = new long[batch.Count];
+                for (int i = 0; i < batch.Count; i++) ids[i] = batch[i].Id;
+                try
+                {
+                    s.Locations.CompleteLocationChecks(ids);
+                    foreach (SendRequest req in batch)
+                        Debug.Log($"[KSP-AP] Checked: {req.Name}");
+                }
+                catch (Exception ex)
+                {
+                    foreach (SendRequest req in batch)
+                        _sendFailures.Enqueue(new SendResult(req, s, ex.Message));
+                }
             }
+        }
+
+        // Applies send failures on the main thread (the worker must not touch
+        // checkedLocationIds / pendingLocationNames). A failure means the
+        // socket died before the library noticed: roll back the dedup add so
+        // the reconnect flush re-sends, queue the name, and notify the console
+        // once so it starts its reconnect cycle. A failure from a session that
+        // a reconnect has since replaced is retried on the new session instead
+        // — notifying for it would tear down the healthy new connection.
+        private void DrainSendFailures()
+        {
+            string failure = null;
+            SendResult r;
+            while (_sendFailures.TryDequeue(out r))
+            {
+                ArchipelagoSession current = session;
+                if (current != null && !ReferenceEquals(current, r.Session))
+                {
+                    _sendQueue.Add(new SendRequest(r.Id, r.Name));
+                    continue;
+                }
+
+                Debug.LogWarning($"[KSP-AP] Location send failed for '{r.Name}': {r.Error}");
+                checkedLocationIds?.Remove(r.Id);
+                pendingLocationNames.Add(r.Name);
+                failure = r.Error;
+            }
+            if (failure != null)
+                onSendFailed?.Invoke(failure);
         }
 
         private void GrantLocalReward(bool grantScience)
@@ -502,9 +627,10 @@ namespace KSPArchipelago
         }
 
         /// <summary>
-        /// Sends any locations queued while offline to the now-connected server.
-        /// Stops on the first send failure so unflushed names stay queued for
-        /// the next reconnect.
+        /// Queues locations checked while offline for sending to the
+        /// now-connected server. The actual sends happen on the send worker;
+        /// names whose send fails return to the pending set via
+        /// DrainSendFailures for the next reconnect.
         /// </summary>
         private void FlushPending()
         {
@@ -525,21 +651,8 @@ namespace KSPArchipelago
                     done.Add(name); // server already has it
                     continue;
                 }
-                try
-                {
-                    session.Locations.CompleteLocationChecks(id);
-                    Debug.Log($"[KSP-AP] Flushed: {name}");
-                    done.Add(name);
-                }
-                catch (Exception ex)
-                {
-                    // Disconnected mid-flush. Roll back the dedup add and
-                    // leave the rest queued for the next reconnect.
-                    Debug.LogWarning($"[KSP-AP] Flush send failed for '{name}': {ex.Message}");
-                    checkedLocationIds.Remove(id);
-                    onSendFailed?.Invoke(ex.Message);
-                    break;
-                }
+                _sendQueue.Add(new SendRequest(id, name));
+                done.Add(name);
             }
             foreach (var name in done)
                 pendingLocationNames.Remove(name);
