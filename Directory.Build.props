@@ -1,0 +1,14 @@
+<Project>
+
+  <!-- Build version stamped into every assembly and read back at runtime by
+       ModVersion (logged to KSP.log and shown in the in-game menu title).
+       Sourced from the git tag by the Makefile / .github/workflows/ci.yml and
+       overridden with `-p:InformationalVersion=<ver>`. "dev" marks an unstamped
+       local build. IncludeSourceRevision... is disabled so the SDK does not
+       append "+<gitsha>" and mangle the string we read back. -->
+  <PropertyGroup>
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">dev</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+</Project>

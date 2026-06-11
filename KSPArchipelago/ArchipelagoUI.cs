@@ -114,7 +114,7 @@ namespace KSPArchipelago
                 id: 0xA9C1A60,
                 screenRect: windowRect,
                 func: DrawWindow,
-                text: "Archipelago",
+                text: $"Archipelago {ModVersion.Version}",
                 options: GUILayout.Width(400));
         }
 

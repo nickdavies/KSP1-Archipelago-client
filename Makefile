@@ -8,6 +8,12 @@ BUILD_DIR_MAIN  = KSPArchipelago/bin/Release/net40
 BUILD_DIR_KSC   = KSPArchipelago.KSC/bin/Release/net48
 LOG             = $(HOME)/workspaces/ksp_ap/ksp_stdout_stderr.log
 
+# Build version stamped into the assemblies (read at runtime by ModVersion:
+# logged to KSP.log and shown in the in-game menu title). Derived from the git
+# tag; CI overrides via `make stage VERSION=<tag>`. A leading "v" is stripped so
+# the v0.4.3 tag yields "0.4.3"; unstamped/untagged trees fall back to "dev".
+VERSION        ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))
+
 .PHONY: all compile compile-main compile-ksc stage install run clean deps
 
 all: stage
@@ -36,7 +42,7 @@ $(OUT_DIR)/ap_placeholders.cfg: scripts/generate_placeholders.py
 # Compile the main KK-free mod using stripped reference assemblies.
 compile-main:
 	@test -d $(STUBS_DIR)/KSP_Data || { echo "Run 'make deps' first to download KSP reference assemblies"; exit 1; }
-	dotnet build -c Release -p:KspDir="$(CURDIR)/$(STUBS_DIR)" KSPArchipelago/KSPArchipelago.csproj
+	dotnet build -c Release -p:KspDir="$(CURDIR)/$(STUBS_DIR)" -p:InformationalVersion="$(VERSION)" KSPArchipelago/KSPArchipelago.csproj
 
 # Compile the KK-dependent selector sub-assembly. Both KK and the Unity
 # refs resolve against the stubs tree — `make deps` drops a KerbalKonstructs.dll
@@ -44,7 +50,7 @@ compile-main:
 # KSP install. Project-references the main csproj so the IStartingBodyHandler
 # interface is shared, not duplicated.
 compile-ksc: compile-main
-	dotnet build -c Release -p:KspDir="$(CURDIR)/$(STUBS_DIR)" KSPArchipelago.KSC/KSPArchipelago.KSC.csproj
+	dotnet build -c Release -p:KspDir="$(CURDIR)/$(STUBS_DIR)" -p:InformationalVersion="$(VERSION)" KSPArchipelago.KSC/KSPArchipelago.KSC.csproj
 
 compile: compile-main compile-ksc
 

@@ -23,8 +23,19 @@ jobs:
       - name: Download KSP reference assemblies
         run: make deps
 
+      - name: Compute build version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and stage
-        run: make stage
+        run: make stage VERSION='${{ steps.version.outputs.version }}'
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

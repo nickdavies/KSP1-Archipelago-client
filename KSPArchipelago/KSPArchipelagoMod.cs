@@ -697,6 +697,7 @@ namespace KSPArchipelago
             DontDestroyOnLoad(this);
 
             WinConsole.Initialize();
+            Debug.Log($"[KSP-AP] KSPArchipelago version {ModVersion.Version}");
             Debug.Log("[KSP-AP] Mod started.");
 
             missionTracker = new MissionTracker();
