@@ -104,6 +104,21 @@ namespace KSPArchipelago
         // library hasn't surfaced yet). Lets APConsole start its reconnect cycle.
         private Action<string> onSendFailed;
 
+        // Simulation / practice mode. When true, ReportLocation short-circuits
+        // to a "would check" toast and does NOT send, queue, dedup, or reward —
+        // letting a player fly a cheat-menu practice mission and Revert without
+        // burning real checks. In-memory only (intentionally not persisted): a
+        // fresh KSP launch is always live. Toggled from ArchipelagoUI; all
+        // access is on the main thread.
+        public bool SimulationMode;
+        // Base location name + frame of the last simulation-mode toast, used to
+        // collapse the multi-slot loops (ReportBodyEvent / OnTechResearched) —
+        // which fire synchronously within one frame — into a single toast.
+        // Frame-scoped so a later mission re-toasts an event even if it matches
+        // the previous session's last toast.
+        private string _lastSimBase;
+        private int _lastSimFrame = -1;
+
         // Locations detected while offline, queued for sending on reconnect.
         // Shared reference with ApScenarioModule for save/load persistence.
         private HashSet<string> pendingLocationNames = new HashSet<string>();
@@ -481,6 +496,13 @@ namespace KSPArchipelago
         /// When grantScience is true, awards a small science bonus on first report.
         public void ReportLocation(string name, bool grantScience = false)
         {
+            // Simulation mode: practice flights report nothing to the server.
+            // This sits ABOVE the offline-queue branch below, so an offline +
+            // simulation player buffers nothing for reconnect either — just a
+            // toast. No send, no dedup, no science: a true no-op the player
+            // can Revert away.
+            if (SimulationMode) { SimNotify(name); return; }
+
             var s = session;
             if (s == null)
             {
@@ -517,6 +539,33 @@ namespace KSPArchipelago
             // and queues the name for the reconnect flush.
             GrantLocalReward(grantScience);
             _sendQueue.Add(new SendRequest(id, name));
+        }
+
+        // Posts a single "would check" toast for a suppressed simulation-mode
+        // report. Strips a trailing " <n>" slot index and skips consecutive
+        // duplicate base names, so a body event firing "Mun Orbit 1/2/3" or a
+        // tech node firing "<node> 1..4" collapse to one toast instead of N.
+        private void SimNotify(string name)
+        {
+            string baseName = StripSlotIndex(name);
+            int frame = Time.frameCount;
+            if (baseName == _lastSimBase && frame == _lastSimFrame) return;
+            _lastSimBase = baseName;
+            _lastSimFrame = frame;
+            ScreenMessages.PostScreenMessage(
+                $"SIMULATION: {baseName} — would check (not sent)",
+                4f, ScreenMessageStyle.UPPER_CENTER);
+            Debug.Log($"[KSP-AP] SIMULATION (suppressed): {name}");
+        }
+
+        // "Mun Orbit 3" -> "Mun Orbit"; "Splashdown" -> "Splashdown".
+        private static string StripSlotIndex(string name)
+        {
+            int sp = name.LastIndexOf(' ');
+            if (sp <= 0 || sp == name.Length - 1) return name;
+            for (int i = sp + 1; i < name.Length; i++)
+                if (!char.IsDigit(name[i])) return name;
+            return name.Substring(0, sp);
         }
 
         // Starts the send worker if it isn't running. Recreates the queue if a

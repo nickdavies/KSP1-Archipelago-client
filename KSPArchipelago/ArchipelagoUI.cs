@@ -17,6 +17,12 @@ namespace KSPArchipelago
         private KSPArchipelagoMod mod;
         private ApplicationLauncherButton toolbarButton;
 
+        // Tray-icon textures. The icon goes grayscale while simulation mode
+        // suppresses checks, as a persistent "this is practice" reminder.
+        private Texture2D iconNormal;
+        private Texture2D iconGray;
+        private bool lastSimMode;
+
         // Panel state.
         private bool showPanel = false;
         private bool wasConnected = false;
@@ -62,6 +68,14 @@ namespace KSPArchipelago
             }
             wasConnected = mod.IsConnected;
 
+            // Swap the tray icon to grayscale while simulation mode is on.
+            bool sim = mod.Tracker?.SimulationMode ?? false;
+            if (sim != lastSimMode && toolbarButton != null)
+            {
+                toolbarButton.SetTexture(sim ? iconGray : iconNormal);
+                lastSimMode = sim;
+            }
+
             bool shouldLock = !mod.IsConnected
                 && HighLogic.LoadedScene == GameScenes.SPACECENTER;
             if (shouldLock)
@@ -88,6 +102,14 @@ namespace KSPArchipelago
         private void AddToolbarButton()
         {
             if (toolbarButton != null) return;
+            iconNormal = GameDatabase.Instance.GetTexture("KSPArchipelago/ap_icon", false)
+                         ?? Texture2D.whiteTexture;
+            iconGray = GameDatabase.Instance.GetTexture("KSPArchipelago/ap_icon_gray", false)
+                       ?? iconNormal;
+            // The button is recreated on every scene change; seed it from the
+            // current (in-memory, scene-surviving) simulation flag so the icon
+            // is right immediately rather than after the next toggle.
+            lastSimMode = mod?.Tracker?.SimulationMode ?? false;
             toolbarButton = ApplicationLauncher.Instance.AddModApplication(
                 onTrue: () => showPanel = true,
                 onFalse: () => showPanel = false,
@@ -96,8 +118,7 @@ namespace KSPArchipelago
                 onEnable: null,
                 onDisable: null,
                 visibleInScenes: ApplicationLauncher.AppScenes.ALWAYS,
-                texture: GameDatabase.Instance.GetTexture("KSPArchipelago/ap_icon", false)
-                         ?? Texture2D.whiteTexture);
+                texture: lastSimMode ? iconGray : iconNormal);
         }
 
         private void RemoveToolbarButton(GameScenes _ = default)
@@ -225,6 +246,24 @@ namespace KSPArchipelago
                 KSPArchipelagoPartsManager.ClearAllExperimentalParts();
                 mod.ResetProgressiveState();
                 mod.ProcessAllItems();
+            }
+            GUILayout.Space(4);
+
+            // Simulation / practice mode: suppress all location checks so a
+            // cheat-menu test flight can be Reverted without burning checks.
+            var tracker = mod.Tracker;
+            bool simOn = tracker != null && tracker.SimulationMode;
+            if (simOn)
+            {
+                Color prev = GUI.color;
+                GUI.color = Color.red;
+                GUILayout.Label("SIMULATION MODE — location checks are NOT being sent");
+                GUI.color = prev;
+            }
+            if (GUILayout.Button($"Simulation Mode (no checks): {(simOn ? "ON" : "OFF")}")
+                && tracker != null)
+            {
+                tracker.SimulationMode = !tracker.SimulationMode;
             }
             GUILayout.Space(4);
 
