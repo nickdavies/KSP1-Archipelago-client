@@ -440,6 +440,12 @@ namespace KSPArchipelago
         // (CareerHackManager touches Funding/Reputation/facility singletons).
         private volatile CareerDirectives _pendingCareerDirectives = null;
 
+        // Goal-mode threshold watcher re-evaluation request. Set on connect and
+        // whenever a location is reported (a completed contract may push the
+        // count past a threshold); drained in Update so the watcher's own
+        // ReportLocation calls never re-enter the report callback.
+        private volatile bool _thresholdsDirty = false;
+
         // Slot data from AP server.
         public int Goal { get; private set; }
         public int Difficulty { get; private set; }
@@ -847,6 +853,17 @@ namespace KSPArchipelago
                 ProcessNewItems();
             }
 
+            // Goal-mode threshold watcher: report any reached "Contract
+            // Threshold N" locations so the server releases the goal item(s).
+            // Drained here (not in the report callback) so its own ReportLocation
+            // calls can't re-enter. It may re-dirty itself via those reports;
+            // that converges in a couple of frames.
+            if (_thresholdsDirty && session != null)
+            {
+                _thresholdsDirty = false;
+                Contracts.ContractThresholdWatcher.Evaluate(missionTracker);
+            }
+
             // Offer + accept owed contracts once the scene is fully up
             // (ContractSystem loaded). Throttled — immediacy on scene entry comes
             // from OnLevelLoadedGUIReady; this is just the periodic catch-up, and
@@ -1122,6 +1139,12 @@ namespace KSPArchipelago
                     foreach (var spec in contractSpecs)
                         Contracts.Primitives.ContractPrimitiveRegistry.ValidateSpec(spec);
                     Contracts.ApContractManager.SetSpecs(contractSpecs);
+
+                    // Goal-mode (count / progressive_unlock) threshold watcher.
+                    // Absent in findable / starting -> no-op.
+                    var thresholdsTok = sd.TryGetValue("contract_thresholds", out object tObj)
+                        ? tObj as Newtonsoft.Json.Linq.JToken : null;
+                    Contracts.ContractThresholdWatcher.Configure(thresholdsTok, contractSpecs);
                 }
                 catch (Exception ex)
                 {
@@ -1254,7 +1277,7 @@ namespace KSPArchipelago
                     missionTracker.SetPendingNames(ApScenarioModule.Instance.PendingLocationNames);
 
                 string trackerError = missionTracker.OnConnect(session, Difficulty, TechSlotsPerNode,
-                    onLocationReported: () => LocationsCheckedCount++,
+                    onLocationReported: () => { LocationsCheckedCount++; _thresholdsDirty = true; },
                     onSendFailed: reason => Console?.NotifyConnectionLost(reason),
                     slotData: sd);
                 if (trackerError != null)
@@ -1286,6 +1309,9 @@ namespace KSPArchipelago
                 _goalDisplayName = sd.TryGetValue("goal_display_name", out object gdObj)
                     ? (string)gdObj : "Unknown Goal";
                 _goalSent = false;
+                // Evaluate thresholds once after connect — catches offline
+                // contract completions / reconnects / server-side !collect.
+                _thresholdsDirty = true;
 
                 // Restore UI counters from session/tracker state.
                 ItemsReceivedCount = newSession.Items.AllItemsReceived.Count;

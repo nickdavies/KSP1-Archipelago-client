@@ -82,7 +82,17 @@ namespace KSPArchipelago.Contracts
         protected override void OnCompleted()
         {
             base.OnCompleted();
-            ReportAndLog(BoundLocation);
+            // Report every reward slot this contract awards (non-goal contracts
+            // have two). ReportAndLog is idempotent, so re-firing is offline-safe.
+            ContractSlotSpec spec = Spec;
+            if (spec != null)
+            {
+                foreach (var loc in spec.Locations) ReportAndLog(loc);
+            }
+            else
+            {
+                ReportAndLog(BoundLocation);
+            }
         }
 
         protected override string GetTitle()

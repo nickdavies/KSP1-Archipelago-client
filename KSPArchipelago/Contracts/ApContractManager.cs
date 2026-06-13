@@ -60,7 +60,10 @@ namespace KSPArchipelago.Contracts
                 {
                     _specs.Add(s);
                     _byItem[s.Item] = s;
-                    _byLocation[s.Location] = s;
+                    // Map EVERY reward slot to the spec so GetByLocation resolves
+                    // a contract loaded/bound by either slot name.
+                    foreach (var loc in s.Locations)
+                        _byLocation[loc] = s;
                 }
             }
             Debug.Log($"[KSP-AP] ApContractManager: loaded {_specs.Count} contract(s)");
@@ -192,6 +195,18 @@ namespace KSPArchipelago.Contracts
             {
                 if (!TryForceOffer(spec)) break;
             }
+
+            // Pass 4: heal a partially-reported multi-slot contract. OnCompleted
+            // reports every slot, but a crash between the two sends could leave a
+            // sibling slot unchecked while the primary is checked. ReportLocation
+            // is idempotent, so re-firing the missing slot is safe.
+            foreach (ContractSlotSpec s in _specs)
+            {
+                if (s.Locations.Count < 2) continue;
+                if (!IsApLocationChecked(s.Location)) continue;
+                foreach (var loc in s.Locations)
+                    if (!IsApLocationChecked(loc)) ReportApLocation(loc);
+            }
         }
 
         private static HashSet<string> SnapshotLiveLocations()
@@ -218,6 +233,13 @@ namespace KSPArchipelago.Contracts
             var mod = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
             var tracker = mod?.Tracker;
             return tracker != null && tracker.IsLocationChecked(apLocationName);
+        }
+
+        private static void ReportApLocation(string apLocationName)
+        {
+            if (string.IsNullOrEmpty(apLocationName)) return;
+            var mod = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
+            mod?.Tracker?.ReportLocation(apLocationName);
         }
     }
 }

@@ -14,10 +14,12 @@ namespace KSPArchipelago.Contracts
     /// <code>
     /// {
     ///   "item":      "Contract: Mine Ore on Mun",   // AP item that unlocks it
-    ///   "location":  "Contract: Mine Ore on Mun",   // reported on completion
+    ///   "locations": ["Contract: Mine Ore on Mun 1",// reported on completion;
+    ///                 "Contract: Mine Ore on Mun 2"],//  non-goal: 2, goal: 1
     ///   "title":     "Mine 100 ore on Mun",
     ///   "synopsis":  "Extract 100 units of ore from the surface of Mun.",
-    ///   "schema":    1,                              // primitive-registry version
+    ///   "schema":    3,                              // primitive-registry version
+    ///   "is_goal":   false,                          // goal contracts are 1:1
     ///   "parameters": [                             // implicit-AND success conditions
     ///     { "kind": "situation", "situation": "landed", "body": "Mun" },
     ///     { "kind": "resource",  "resource": "Ore", "min": 100 }
@@ -34,8 +36,19 @@ namespace KSPArchipelago.Contracts
     {
         /// <summary>AP item whose receipt offers this contract.</summary>
         public string Item { get; private set; }
-        /// <summary>AP location reported when the contract completes.</summary>
-        public string Location { get; private set; }
+        /// <summary>
+        /// AP reward location(s) reported when the contract completes. Non-goal
+        /// contracts carry two slots; goal contracts one. Always non-empty.
+        /// </summary>
+        public IList<string> Locations { get; private set; }
+        /// <summary>
+        /// Primary / binding location (slot 1). Used as the contract's stable
+        /// identity for offering, dedup, save/restore, and lookup; the sibling
+        /// slot (if any) is reported alongside it but never bound to.
+        /// </summary>
+        public string Location => Locations[0];
+        /// <summary>True for a goal contract (1:1, no slot suffix).</summary>
+        public bool IsGoal { get; private set; }
         public string Title { get; private set; }
         public string Synopsis { get; private set; }
         /// <summary>Primitive-registry version. The client rejects unknown values.</summary>
@@ -50,9 +63,19 @@ namespace KSPArchipelago.Contracts
             string item = (string)obj["item"];
             if (string.IsNullOrEmpty(item))
                 throw new FormatException("contract entry missing 'item'");
-            string location = (string)obj["location"];
-            if (string.IsNullOrEmpty(location))
-                throw new FormatException($"contract '{item}' missing 'location'");
+
+            var locations = new List<string>();
+            if (obj["locations"] is JArray locArr)
+            {
+                foreach (JToken lt in locArr)
+                {
+                    string ln = (string)lt;
+                    if (!string.IsNullOrEmpty(ln)) locations.Add(ln);
+                }
+            }
+            if (locations.Count == 0)
+                throw new FormatException(
+                    $"contract '{item}' missing non-empty 'locations'");
 
             int schema = (int?)obj["schema"]
                 ?? throw new FormatException($"contract '{item}' missing 'schema'");
@@ -74,9 +97,10 @@ namespace KSPArchipelago.Contracts
             return new ContractSlotSpec
             {
                 Item = item,
-                Location = location,
-                Title = (string)obj["title"] ?? location,
-                Synopsis = (string)obj["synopsis"] ?? (string)obj["title"] ?? location,
+                Locations = locations,
+                IsGoal = (bool?)obj["is_goal"] ?? false,
+                Title = (string)obj["title"] ?? locations[0],
+                Synopsis = (string)obj["synopsis"] ?? (string)obj["title"] ?? locations[0],
                 Schema = schema,
                 Parameters = parameters,
             };

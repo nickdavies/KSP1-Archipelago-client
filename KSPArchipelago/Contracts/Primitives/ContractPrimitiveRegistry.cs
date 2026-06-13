@@ -12,14 +12,16 @@ namespace KSPArchipelago.Contracts.Primitives
     /// build time. This is the runtime half of the client/server drift
     /// mitigation (version handshake + whitelist).
     ///
-    /// Schema 2 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
+    /// Schema 3 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
     /// <c>crew_capacity</c>, <c>plant_flag</c>, <c>sample_return</c>, <c>has_system</c>,
-    /// <c>specific_orbit</c>, <c>collect_science</c>.
+    /// <c>specific_orbit</c>, <c>collect_science</c>. (Schema 3 also changed the
+    /// contract wire format: a single <c>location</c> string became a
+    /// <c>locations</c> array so non-goal contracts can award two reward slots.)
     /// </summary>
     public static class ContractPrimitiveRegistry
     {
         /// <summary>Highest primitive-registry schema this client understands.</summary>
-        public const int Schema = 2;
+        public const int Schema = 3;
 
         private static readonly Dictionary<string, IContractPrimitive> _byKind
             = new Dictionary<string, IContractPrimitive>(StringComparer.Ordinal);
