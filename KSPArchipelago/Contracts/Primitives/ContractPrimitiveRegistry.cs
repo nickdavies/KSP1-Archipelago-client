@@ -12,16 +12,17 @@ namespace KSPArchipelago.Contracts.Primitives
     /// build time. This is the runtime half of the client/server drift
     /// mitigation (version handshake + whitelist).
     ///
-    /// Schema 3 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
+    /// Schema 4 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
     /// <c>crew_capacity</c>, <c>plant_flag</c>, <c>sample_return</c>, <c>has_system</c>,
-    /// <c>specific_orbit</c>, <c>collect_science</c>. (Schema 3 also changed the
-    /// contract wire format: a single <c>location</c> string became a
-    /// <c>locations</c> array so non-goal contracts can award two reward slots.)
+    /// <c>specific_orbit</c>, <c>collect_science</c>, <c>rescue</c>. (Schema 3
+    /// changed the wire format: a single <c>location</c> became a <c>locations</c>
+    /// array. Schema 4 added the <c>rescue</c> primitive, which spawns a stranded
+    /// Kerbal — the only world-mutating primitive.)
     /// </summary>
     public static class ContractPrimitiveRegistry
     {
         /// <summary>Highest primitive-registry schema this client understands.</summary>
-        public const int Schema = 3;
+        public const int Schema = 4;
 
         private static readonly Dictionary<string, IContractPrimitive> _byKind
             = new Dictionary<string, IContractPrimitive>(StringComparer.Ordinal);
@@ -37,6 +38,7 @@ namespace KSPArchipelago.Contracts.Primitives
             Register(new HasSystemPrimitive());
             Register(new SpecificOrbitPrimitive());
             Register(new CollectSciencePrimitive());
+            Register(new RescuePrimitive());
         }
 
         private static void Register(IContractPrimitive primitive)
