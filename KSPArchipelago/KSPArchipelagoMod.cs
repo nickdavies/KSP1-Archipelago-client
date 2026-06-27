@@ -419,7 +419,7 @@ namespace KSPArchipelago
         private float _lastReconcileTime = 0f;
 
         private enum ReconcileTrigger
-        { SceneReady, ContractsLoaded, GateFallback, ItemsReceived, Connect, Backstop }
+        { SceneReady, ContractsLoaded, GateFallback, ItemsReceived, Connect, Backstop, ContractCancelled }
 
         // Request a contract reconcile on the next Update tick where the scene
         // and ContractSystem are ready. Idempotent within a frame; last trigger
@@ -449,6 +449,16 @@ namespace KSPArchipelago
             GameEvents.onGameSceneLoadRequested.Add(OnSceneChange);
             GameEvents.onLevelWasLoadedGUIReady.Add(OnLevelLoadedGUIReady);
             GameEvents.Contract.onContractsLoaded.Add(OnContractsLoaded);
+            // A cancelled/declined AP contract is still owed — re-offer it.
+            GameEvents.Contract.onCancelled.Add(OnContractCancelledOrDeclined);
+            GameEvents.Contract.onDeclined.Add(OnContractCancelledOrDeclined);
+        }
+
+        private void OnContractCancelledOrDeclined(global::Contracts.Contract c)
+        {
+            if (session == null) return;
+            if (c is Contracts.ApGenericContract)
+                MarkContractsDirty(ReconcileTrigger.ContractCancelled);
         }
 
         // The scene is fully up (GUI ready) — ContractSystem has finished
@@ -1125,6 +1135,8 @@ namespace KSPArchipelago
             GameEvents.onGameSceneLoadRequested.Remove(OnSceneChange);
             GameEvents.onLevelWasLoadedGUIReady.Remove(OnLevelLoadedGUIReady);
             GameEvents.Contract.onContractsLoaded.Remove(OnContractsLoaded);
+            GameEvents.Contract.onCancelled.Remove(OnContractCancelledOrDeclined);
+            GameEvents.Contract.onDeclined.Remove(OnContractCancelledOrDeclined);
             missionTracker?.Destroy();
         }
     }
