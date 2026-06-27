@@ -163,6 +163,14 @@ namespace KSPArchipelago.Contracts
         ///   2. Accept any ApGenericContract still sitting in Offered.
         ///   3. Force-activate any received contract not yet present.
         /// </summary>
+        /// <summary>
+        /// True once KSP's ContractSystem exists and its contract list is loaded.
+        /// The mod uses this as a self-healing fallback for the reconcile gate when
+        /// the (intermittent) onContractsLoaded event doesn't fire for a scene.
+        /// </summary>
+        public static bool ContractsReady()
+            => ContractSystem.Instance?.Contracts != null;
+
         public static void ReconcileOffers()
         {
             var cs = ContractSystem.Instance;

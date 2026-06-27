@@ -443,6 +443,11 @@ namespace KSPArchipelago
         // (re-spawning rescue Kerbals). Gate all reconciling on this instead.
         private volatile bool _contractsLoaded = false;
 
+        // Frames the scene has been stable while still waiting for contracts to be
+        // marked loaded. Drives the self-healing fallback below when KSP's
+        // onContractsLoaded event doesn't fire. Reset on every scene change.
+        private int _contractsReadyFrames = 0;
+
         private void OnLevelLoadedGUIReady(GameScenes scene)
         {
             _sceneReady = true;
@@ -592,6 +597,21 @@ namespace KSPArchipelago
             {
                 _thresholdsDirty = false;
                 Contracts.ContractThresholdWatcher.Evaluate(missionTracker);
+            }
+
+            // Self-healing reconcile gate. _contractsLoaded is normally set by KSP's
+            // onContractsLoaded event, but that event is intermittent — some scene
+            // loads never fire it, which wedges the gate shut and silently stops
+            // offering contracts for the whole session. Fallback: once the scene has
+            // been stable a moment AND KSP's ContractSystem is populated, the empty-
+            // reload window is past, so mark contracts loaded ourselves.
+            if (session != null && _sceneReady && !_contractsLoaded
+                && ++_contractsReadyFrames > 120
+                && Contracts.ApContractManager.ContractsReady())
+            {
+                _contractsLoaded = true;
+                Debug.Log("[KSP-AP] contracts gate opened by fallback "
+                        + "(onContractsLoaded did not fire this scene)");
             }
 
             // Offer + accept owed contracts once the scene is fully up
@@ -1046,6 +1066,7 @@ namespace KSPArchipelago
             // into a half-loaded system (the empty-reload-window duplicate bug).
             _sceneReady = false;
             _contractsLoaded = false;
+            _contractsReadyFrames = 0;
 
             if (scene == GameScenes.MAINMENU && IsConnected)
             {
