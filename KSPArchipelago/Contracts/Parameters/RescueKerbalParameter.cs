@@ -12,18 +12,22 @@ namespace KSPArchipelago.Contracts.Parameters
     /// that genuinely needs in-game play-testing.
     ///
     /// Lifecycle:
-    ///  - OnUpdate (first safe frame): spawn the stranded Kerbal + pod, once.
+    ///  - OnUpdate (throttled): spawn the stranded Kerbal + pod once a stable
+    ///    scene is up. `_spawned` is set ONLY after a vessel actually exists, so
+    ///    a transient failure retries instead of latching a no-vessel contract.
     ///  - onVesselRecovered: complete when the recovered vessel carries the
     ///    stranded Kerbal (the player rendezvoused, boarded them, and came home).
     ///  - OnSave/OnLoad: persist the Kerbal name + spawned flag + stranded vessel
-    ///    id so a reload neither re-spawns nor loses the target.
+    ///    id so a reload neither re-spawns nor loses the target. OnLoad self-heals
+    ///    a `spawned=true, stranded_id=0` save (a previously latched failed spawn).
     /// </summary>
     public class RescueKerbalParameter : ContractParameter
     {
         public string BodyName = "";
         public string KerbalName = "";
-        private bool _spawned = false;
+        private bool _spawned = false;        // true only once a vessel actually exists
         private uint _strandedVesselId = 0;
+        private float _nextAttempt = 0f;      // in-memory retry throttle (not persisted)
 
         public RescueKerbalParameter() { }
 
@@ -55,7 +59,14 @@ namespace KSPArchipelago.Contracts.Parameters
         {
             if (Root == null || Root.ContractState != Contract.State.Active) return;
             if (state == ParameterState.Complete) return;
-            if (!_spawned) TrySpawn();
+            if (_spawned) return;
+            // Retry throttle: a transient failure (scene not ready, no pod yet)
+            // must not spam every tick, but must also never latch permanently —
+            // the previous "set _spawned on failure" baked a no-vessel contract
+            // into the save forever.
+            if (Time.unscaledTime < _nextAttempt) return;
+            _nextAttempt = Time.unscaledTime + 5f;
+            TrySpawn();
         }
 
         private void TrySpawn()
@@ -71,21 +82,35 @@ namespace KSPArchipelago.Contracts.Parameters
                 CelestialBody body = FlightGlobals.GetBodyByName(BodyName);
                 if (body == null)
                 {
-                    Debug.LogWarning($"[KSP-AP] rescue: unknown body '{BodyName}'");
-                    _spawned = true;   // don't spin forever on a bad body
+                    // Bad server data — nothing we can ever do, so stop.
+                    Debug.LogWarning($"[KSP-AP] rescue: unknown body '{BodyName}', giving up");
+                    _spawned = true;
                     return;
                 }
 
-                // A fresh, unowned Kerbal is the rescue target.
-                ProtoCrewMember kerbal = HighLogic.CurrentGame.CrewRoster.GetNewKerbal(
-                    ProtoCrewMember.KerbalType.Unowned);
+                // Resolve a crewed command pod defensively. A hard-coded
+                // "mk1pod_v2" returned null from getPartInfoByName at runtime
+                // (CreatePartNode then threw "No part in loader found"). Try the
+                // known stock names AND scan for any crewed pod, passing the
+                // RESOLVED name so the internal lookup is guaranteed to hit.
+                AvailablePart pod = ResolveRescuePod();
+                if (pod == null)
+                {
+                    // Transient/unexpected — DON'T latch; retry on the throttle.
+                    Debug.LogWarning("[KSP-AP] rescue: no usable crew pod part found yet, will retry");
+                    return;
+                }
+
+                // Reuse the Kerbal a prior (failed) attempt already named, so a
+                // self-healed retry doesn't litter the roster with orphans.
+                ProtoCrewMember kerbal = ResolveOrCreateKerbal();
                 KerbalName = kerbal.name;
 
                 // A small enclosed pod holding the stranded Kerbal, in a low orbit.
                 uint flightId = ShipConstruction.GetUniqueFlightID(
                     HighLogic.CurrentGame.flightState);
                 ConfigNode partNode = ProtoVessel.CreatePartNode(
-                    "mk1pod_v2", flightId, kerbal);
+                    pod.name, flightId, kerbal);
                 double floor = body.Radius * 0.12
                     + (body.atmosphere ? body.atmosphereDepth : 0.0);
                 double ceil = floor + body.Radius * 0.25;
@@ -95,15 +120,87 @@ namespace KSPArchipelago.Contracts.Parameters
                     "Stranded " + KerbalName, VesselType.Ship, orbit, 0,
                     new[] { partNode });
                 ProtoVessel pv = HighLogic.CurrentGame.AddVessel(vesselNode);
-                _strandedVesselId = pv != null ? pv.persistentId : 0;
-                _spawned = true;
-                Debug.Log($"[KSP-AP] rescue: spawned {KerbalName} in orbit of {BodyName}");
+                if (pv == null)
+                {
+                    // AddVessel failed — DON'T latch; retry.
+                    Debug.LogWarning("[KSP-AP] rescue: AddVessel returned null, will retry");
+                    return;
+                }
+                _strandedVesselId = pv.persistentId;
+                // Mark the spawned vessel UNOWNED so the player can't just fly it
+                // or EVA the Kerbal — they must rendezvous and recover. Done on the
+                // proto AFTER AddVessel (null-safe): building the discovery into
+                // the vessel node NRE'd inside CreateVesselNode.
+                try
+                {
+                    pv.discoveryInfo = ProtoVessel.CreateDiscoveryNode(
+                        DiscoveryLevels.Unowned, UntrackedObjectClass.A,
+                        double.PositiveInfinity, double.PositiveInfinity);
+                    if (pv.vesselRef != null && pv.vesselRef.DiscoveryInfo != null)
+                        pv.vesselRef.DiscoveryInfo.SetLevel(DiscoveryLevels.Unowned);
+                }
+                catch (Exception dex)
+                {
+                    Debug.LogWarning($"[KSP-AP] rescue: could not set Unowned discovery: {dex.Message}");
+                }
+                _spawned = true;   // only NOW is the spawn real
+                Debug.Log($"[KSP-AP] rescue: spawned {KerbalName} ({pod.name}) in orbit of {BodyName}");
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[KSP-AP] rescue spawn failed: {ex}");
-                _spawned = true;   // a hard failure shouldn't retry every frame
+                // Do NOT latch _spawned — a transient failure must be retryable,
+                // and a persisted "spawned with no vessel" is the bug we're fixing.
+                Debug.LogError($"[KSP-AP] rescue spawn failed (will retry): {ex}");
             }
+        }
+
+        // Reuse the Kerbal named by an earlier attempt if it still exists,
+        // otherwise mint a fresh unowned rescue target.
+        private static ProtoCrewMember LookupKerbal(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            var roster = HighLogic.CurrentGame?.CrewRoster;
+            if (roster == null) return null;
+            foreach (ProtoCrewMember c in roster.Unowned)
+                if (c != null && c.name == name) return c;
+            foreach (ProtoCrewMember c in roster.Crew)
+                if (c != null && c.name == name) return c;
+            return null;
+        }
+
+        private ProtoCrewMember ResolveOrCreateKerbal()
+        {
+            ProtoCrewMember existing = LookupKerbal(KerbalName);
+            if (existing != null) return existing;
+            return HighLogic.CurrentGame.CrewRoster.GetNewKerbal(
+                ProtoCrewMember.KerbalType.Unowned);
+        }
+
+        // First loaded crewable command pod. Tries the common stock pods by name,
+        // then falls back to scanning every loaded part for a crew-carrying
+        // command module so a renamed/missing pod can never break the rescue.
+        private static AvailablePart ResolveRescuePod()
+        {
+            string[] candidates = { "mk1pod_v2", "mk1pod.v2", "mk1Pod", "mk1pod",
+                                    "landerCabinSmall", "Mark1Cockpit" };
+            foreach (string n in candidates)
+            {
+                AvailablePart ap = PartLoader.getPartInfoByName(n);
+                if (ap?.partPrefab != null) return ap;
+            }
+            var loaded = PartLoader.LoadedPartsList;
+            if (loaded != null)
+            {
+                for (int i = 0; i < loaded.Count; i++)
+                {
+                    AvailablePart ap = loaded[i];
+                    if (ap?.partPrefab == null) continue;
+                    if (ap.partPrefab.CrewCapacity >= 1
+                        && ap.partPrefab.FindModuleImplementing<ModuleCommand>() != null)
+                        return ap;
+                }
+            }
+            return null;
         }
 
         private void OnVesselRecovered(ProtoVessel pv, bool quick)
@@ -134,6 +231,15 @@ namespace KSPArchipelago.Contracts.Parameters
             KerbalName = node.GetValue("kerbal") ?? "";
             bool.TryParse(node.GetValue("spawned"), out _spawned);
             uint.TryParse(node.GetValue("stranded_id"), out _strandedVesselId);
+            // Self-heal: a save where spawned=true but no vessel id was recorded
+            // is a latched failed spawn (the old code set spawned=true in its
+            // catch). Clear it so OnUpdate retries and actually creates the craft.
+            if (_spawned && _strandedVesselId == 0)
+            {
+                _spawned = false;
+                Debug.Log("[KSP-AP] rescue: clearing latched failed spawn "
+                        + $"(body={BodyName}), will respawn");
+            }
         }
     }
 }
