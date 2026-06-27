@@ -226,29 +226,6 @@ namespace KSPArchipelago
             }
             GUILayout.Space(4);
 
-            // Tri-state part tier-lock toggle. Cycles Enabled → Disabled →
-            // Server-Controlled. Reads/writes the mod directly (not the
-            // scenario module) so the button works in the EDITOR scene where
-            // ApScenarioModule.Instance is null. Rebuilds placeholder state
-            // without re-awarding science (AwardedItemIndices is preserved,
-            // so ProcessAllItems treats every item as already-awarded).
-            string tlmLabel;
-            switch (mod.TierLockMode)
-            {
-                case TierLockMode.Enabled: tlmLabel = "Enabled"; break;
-                case TierLockMode.Disabled: tlmLabel = "Disabled"; break;
-                default: tlmLabel = "Server-Controlled"; break;
-            }
-            if (GUILayout.Button($"Part Tier Lock: {tlmLabel}"))
-            {
-                mod.CycleTierLockMode();
-                KSPArchipelagoPartsManager.ScrubTechTree();
-                KSPArchipelagoPartsManager.ClearAllExperimentalParts();
-                mod.ResetProgressiveState();
-                mod.ProcessAllItems();
-            }
-            GUILayout.Space(4);
-
             // Simulation / practice mode: suppress all location checks so a
             // cheat-menu test flight can be Reverted without burning checks.
             var tracker = mod.Tracker;

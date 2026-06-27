@@ -28,12 +28,6 @@ namespace KSPArchipelago
         {
             node.AddValue("apScience", TotalApScienceAwarded);
             node.AddValue("awardedItems", string.Join(",", AwardedItemIndices));
-            // Persist the canonical TierLockMode (owned by KSPArchipelagoMod
-            // so it's available in the EDITOR scene where this scenario is
-            // not registered).
-            var mod = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
-            if (mod != null)
-                node.AddValue("tierLockMode", mod.SnapshotTierLockModeForSave());
             if (PendingLocationNames.Count > 0)
                 node.AddValue("pendingLocations", string.Join("|", PendingLocationNames));
 
@@ -61,10 +55,6 @@ namespace KSPArchipelago
                 foreach (string s in raw.Split(','))
                     if (int.TryParse(s.Trim(), out int idx))
                         AwardedItemIndices.Add(idx);
-
-            var mod = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
-            if (mod != null && int.TryParse(node.GetValue("tierLockMode"), out int tlmInt))
-                mod.LoadTierLockModeFromSave(tlmInt);
 
             // Merge save-file names into the existing in-memory set rather than
             // replacing it. Replacing would lose locations checked while offline

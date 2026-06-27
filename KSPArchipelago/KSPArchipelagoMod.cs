@@ -12,25 +12,8 @@ using Archipelago.MultiClient.Net.Helpers;
 
 namespace KSPArchipelago
 {
-    /// <summary>
-    /// User-visible override for progressive part-tier locking. Persisted in
-    /// the save file via ApScenarioModule. "ServerControlled" defers to the
-    /// `tier_lock_enabled` slot_data flag (which defaults to enabled when
-    /// absent, matching the generation logic's assumption).
-    /// </summary>
-    public enum TierLockMode { Enabled, Disabled, ServerControlled }
-
     public static class KSPArchipelagoPartsManager
     {
-        // Tier-locked parts shown in editor as AP-icon placeholders.
-        // Key = placeholder part name, Value = real part name.
-        private static readonly Dictionary<string, string> _tierLockedParts = new Dictionary<string, string>();
-        // Reverse lookup: real part name → placeholder part name.
-        private static readonly Dictionary<string, string> _tierLockReverse = new Dictionary<string, string>();
-        // Which placeholder indices are allocated for tier-lock use.
-        private static readonly HashSet<int> _usedPlaceholderIndices = new HashSet<int>();
-        public static Dictionary<string, string> TierLockedParts => _tierLockedParts;
-
         // Populated from slot_data at connect time.
         private static Dictionary<string, float> SciencePackAmounts = new Dictionary<string, float>();
 
@@ -158,57 +141,17 @@ namespace KSPArchipelago
                 return;
             }
 
-            // Progressive part items: unlock 1 random part from the new tier,
-            // plus any individually-received parts from that tier.
-            if (mod?.ProgressiveTiers != null
-                && mod.ProgressiveTiers.TryGetValue(itemName, out var tierMap))
-            {
-                int newLevel = mod.IncrementProgressiveCount(itemName);
-                int unlocked = mod.UnlockProgressiveTier(itemName, newLevel);
-                if (showToast)
-                {
-                    toastText = $"AP: {itemName} Tier {newLevel} ({unlocked} parts unlocked)";
-                    Debug.Log($"[KSP-AP] {itemName} → tier {newLevel}, {unlocked} parts");
-                    ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
-                    PostToMessageSystem(senderName, locationName, toastText);
-                }
-                return;
-            }
-
-            // Individual part items: unlock only if the progressive tier gate
-            // is satisfied (or if the part is not in any progressive chain).
+            // Individual part items: unlock the part as experimental.
             AvailablePart part = PartLoader.getPartInfoByName(itemName);
             if (part != null)
             {
-                if (mod != null) mod.TrackReceivedPart(itemName);
-
-                if (mod != null && mod.IsPartTierLocked(itemName))
+                ResearchAndDevelopment.AddExperimentalPart(part);
+                Debug.Log($"[KSP-AP] Unlocked part '{itemName}' ({part.title})");
+                if (showToast)
                 {
-                    // Show an AP-icon placeholder in the editor instead of the
-                    // real part. EditorTierLock blocks placement attempts.
-                    string progName = mod.GetPartProgressiveName(itemName);
-                    int reqTier = mod.GetPartRequiredTier(itemName);
-                    AllocateTierLockPlaceholder(itemName, part, progName, reqTier);
-
-                    Debug.Log($"[KSP-AP] Tier-locked part '{itemName}' ({part.title}) "
-                            + $"placeholder in editor, requires {progName} Tier {reqTier}");
-                    if (showToast)
-                    {
-                        toastText = $"AP: {part.title} (tier locked)";
-                        ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
-                        PostToMessageSystem(senderName, locationName, toastText);
-                    }
-                }
-                else
-                {
-                    ResearchAndDevelopment.AddExperimentalPart(part);
-                    Debug.Log($"[KSP-AP] Unlocked part '{itemName}' ({part.title})");
-                    if (showToast)
-                    {
-                        toastText = $"AP: Unlocked {part.title}";
-                        ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
-                        PostToMessageSystem(senderName, locationName, toastText);
-                    }
+                    toastText = $"AP: Unlocked {part.title}";
+                    ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
+                    PostToMessageSystem(senderName, locationName, toastText);
                 }
             }
             else
@@ -235,78 +178,6 @@ namespace KSPArchipelago
             MessageSystem.Instance.AddMessage(msg);
         }
 
-        private static void AllocateTierLockPlaceholder(
-            string realPartName, AvailablePart realPart, string progName, int reqTier)
-        {
-            // Skip if already allocated (idempotent on replay).
-            if (_tierLockReverse.ContainsKey(realPartName)) return;
-
-            // Find next free placeholder index.
-            int idx = -1;
-            for (int i = 1; i <= 250; i++)
-            {
-                if (!_usedPlaceholderIndices.Contains(i))
-                {
-                    idx = i;
-                    break;
-                }
-            }
-            if (idx < 0)
-            {
-                Debug.LogWarning("[KSP-AP] Ran out of placeholders for tier-lock");
-                return;
-            }
-
-            string phName = $"ap.placeholder.{idx:D3}";
-            AvailablePart ph = PartLoader.getPartInfoByName(phName);
-            if (ph == null)
-            {
-                Debug.LogWarning($"[KSP-AP] Placeholder '{phName}' not found in PartLoader");
-                return;
-            }
-
-            ph.title = $"{realPart.title} (tier locked)";
-            ph.description = $"Requires {progName} Tier {reqTier}\n\n{realPart.description}";
-            ph.category = realPart.category;
-            ResearchAndDevelopment.AddExperimentalPart(ph);
-
-            _usedPlaceholderIndices.Add(idx);
-            _tierLockedParts[phName] = realPartName;
-            _tierLockReverse[realPartName] = phName;
-        }
-
-        private static void FreeTierLockPlaceholder(string realPartName)
-        {
-            if (!_tierLockReverse.TryGetValue(realPartName, out string phName))
-                return;
-
-            AvailablePart ph = PartLoader.getPartInfoByName(phName);
-            if (ph != null)
-            {
-                ResearchAndDevelopment.RemoveExperimentalPart(ph);
-                ph.title = "AP Item";
-                ph.description = "An Archipelago multiworld item.";
-                ph.category = PartCategories.none;
-            }
-
-            // Parse index from name to free it.
-            string suffix = phName.Substring("ap.placeholder.".Length);
-            if (int.TryParse(suffix, out int idx))
-                _usedPlaceholderIndices.Remove(idx);
-
-            _tierLockedParts.Remove(phName);
-            _tierLockReverse.Remove(realPartName);
-            Debug.Log($"[KSP-AP] Tier-lock cleared for '{realPartName}' (freed {phName})");
-        }
-
-        /// <summary>
-        /// Remove tier-lock placeholder for a part when its progressive tier arrives.
-        /// </summary>
-        public static void RestoreTierLockOverrides(string partName, AvailablePart ap)
-        {
-            FreeTierLockPlaceholder(partName);
-        }
-
         public static void ScrubTechTree()
         {
             foreach (AvailablePart part in PartLoader.LoadedPartsList)
@@ -318,21 +189,6 @@ namespace KSPArchipelago
 
         public static void ClearAllExperimentalParts()
         {
-            // Reset placeholder titles/descriptions and free indices.
-            foreach (var kvp in _tierLockedParts)
-            {
-                AvailablePart ph = PartLoader.getPartInfoByName(kvp.Key);
-                if (ph != null)
-                {
-                    ph.title = "AP Item";
-                    ph.description = "An Archipelago multiworld item.";
-                    ph.category = PartCategories.none;
-                }
-            }
-            _tierLockedParts.Clear();
-            _tierLockReverse.Clear();
-            _usedPlaceholderIndices.Clear();
-
             foreach (AvailablePart part in PartLoader.LoadedPartsList)
                 ResearchAndDevelopment.RemoveExperimentalPart(part);
         }
@@ -484,36 +340,8 @@ namespace KSPArchipelago
         // Tech node ID → required R&D band (from slot data).
         public Dictionary<string, int> NodeBands { get; private set; }
 
-        // Server-side tier-lock toggle from slot_data. Defaults to true when
-        // the key is absent (older slot_data, generation always assumed tier
-        // locking was on). Consulted only when the user-side TierLockMode is
-        // ServerControlled.
-        public bool ServerTierLockEnabled { get; private set; } = true;
-
-        // Canonical user-side tier-lock override. Lives on the mod (not on
-        // ApScenarioModule) because the scenario is not registered for the
-        // EDITOR scene — placing it here makes it available everywhere, and
-        // ApScenarioModule becomes a save/load shim that calls
-        // SnapshotTierLockModeForSave / LoadTierLockModeFromSave.
-        public TierLockMode TierLockMode { get; private set; } = TierLockMode.ServerControlled;
-        // Set when the user toggles, cleared when the scenario writes our
-        // value to .sfs. Protects an editor-side toggle from being clobbered
-        // by the next scenario.OnLoad reading a stale .sfs value (the EDITOR
-        // scene has no scenario instance, so no OnSave fires on the way out).
-        private bool _tierLockModeDirty = false;
-
-        // Progressive part tiers from slot_data: item name → tier → part cfg_names.
-        public Dictionary<string, Dictionary<int, List<string>>> ProgressiveTiers { get; private set; }
-        // Server-selected representative per progressive tier: item name → tier → cfg_name.
-        public Dictionary<string, Dictionary<int, string>> ProgressiveRepresentatives { get; private set; }
-        // Reverse lookup: part cfg_name → progressive item name.
-        private Dictionary<string, string> _partProgName = new Dictionary<string, string>();
-        // Reverse lookup: part cfg_name → tier number within its progressive chain.
-        private Dictionary<string, int> _partProgTier = new Dictionary<string, int>();
         // Running count of progressive item copies received (reset on rebuild).
         private Dictionary<string, int> _progressiveCounts = new Dictionary<string, int>();
-        // Individual parts received (for tier-gating: unlock when tier arrives).
-        private HashSet<string> _receivedParts = new HashSet<string>();
 
         // Expose connection state for the UI.
         public bool IsConnected => session != null;
@@ -543,145 +371,6 @@ namespace KSPArchipelago
             _progressiveCounts.TryGetValue(itemName, out int c);
             _progressiveCounts[itemName] = c + 1;
             return c + 1;
-        }
-
-        /// <summary>
-        /// Unlock the server-selected representative for the given tier, plus any
-        /// individually-received parts from that tier. Returns total parts unlocked.
-        /// </summary>
-        public int UnlockProgressiveTier(string progName, int tier)
-        {
-            if (ProgressiveTiers == null) return 0;
-            if (!ProgressiveTiers.TryGetValue(progName, out var tierMap)) return 0;
-            if (!tierMap.TryGetValue(tier, out var partNames)) return 0;
-
-            // Use server-selected representative for this tier.
-            string chosen = null;
-            if (ProgressiveRepresentatives != null
-                && ProgressiveRepresentatives.TryGetValue(progName, out var repMap)
-                && repMap.TryGetValue(tier, out string rep))
-            {
-                chosen = rep;
-            }
-
-            int unlocked = 0;
-            // Unlock the representative.
-            if (chosen != null)
-            {
-                AvailablePart chosenPart = PartLoader.getPartInfoByName(chosen);
-                if (chosenPart != null)
-                {
-                    ResearchAndDevelopment.AddExperimentalPart(chosenPart);
-                    KSPArchipelagoPartsManager.RestoreTierLockOverrides(chosen, chosenPart);
-                    unlocked++;
-                }
-            }
-
-            // Also unlock any individually-received parts from this tier.
-            foreach (string p in partNames)
-            {
-                if (p == chosen) continue;
-                if (PartLoader.getPartInfoByName(p) == null) continue;
-                if (_receivedParts.Contains(p))
-                {
-                    AvailablePart ap = PartLoader.getPartInfoByName(p);
-                    if (ap != null)
-                    {
-                        ResearchAndDevelopment.AddExperimentalPart(ap);
-                        KSPArchipelagoPartsManager.RestoreTierLockOverrides(p, ap);
-                        unlocked++;
-                    }
-                }
-            }
-            return unlocked;
-        }
-
-        /// <summary>
-        /// Resolves the user-facing TierLockMode and the server's slot_data
-        /// flag into a single bool: true means tier locking is in effect.
-        /// </summary>
-        public bool IsTierLockEffective()
-        {
-            switch (TierLockMode)
-            {
-                case TierLockMode.Enabled: return true;
-                case TierLockMode.Disabled: return false;
-                default: return ServerTierLockEnabled;
-            }
-        }
-
-        /// <summary>
-        /// Cycle Enabled → Disabled → ServerControlled → Enabled. Callers are
-        /// expected to follow up with a full re-process (Scrub + Clear +
-        /// ResetProgressive + ProcessAllItems) so placeholder state matches
-        /// the new mode.
-        /// </summary>
-        public void CycleTierLockMode()
-        {
-            TierLockMode next;
-            switch (TierLockMode)
-            {
-                case TierLockMode.Enabled: next = TierLockMode.Disabled; break;
-                case TierLockMode.Disabled: next = TierLockMode.ServerControlled; break;
-                default: next = TierLockMode.Enabled; break;
-            }
-            TierLockMode = next;
-            _tierLockModeDirty = true;
-        }
-
-        /// <summary>
-        /// Called by ApScenarioModule.OnLoad. Skipped when the user has
-        /// toggled the mode since the last save — protects editor-side
-        /// changes from a stale .sfs value (the EDITOR scene has no scenario
-        /// instance, so a VAB → KSC transition would otherwise overwrite the
-        /// user's in-editor toggle with the pre-editor save state).
-        /// </summary>
-        public void LoadTierLockModeFromSave(int rawValue)
-        {
-            if (_tierLockModeDirty) return;
-            if (System.Enum.IsDefined(typeof(TierLockMode), rawValue))
-                TierLockMode = (TierLockMode)rawValue;
-        }
-
-        /// <summary>
-        /// Called by ApScenarioModule.OnSave. Clears the dirty flag because
-        /// the on-disk save now reflects the in-memory value.
-        /// </summary>
-        public int SnapshotTierLockModeForSave()
-        {
-            _tierLockModeDirty = false;
-            return (int)TierLockMode;
-        }
-
-        /// <summary>
-        /// Check if a part is in a progressive chain whose tier is not yet unlocked.
-        /// Returns false unconditionally when tier locking has been disabled by
-        /// the user or by slot_data — see IsTierLockEffective().
-        /// </summary>
-        public bool IsPartTierLocked(string partName)
-        {
-            if (!IsTierLockEffective())
-                return false;
-            if (!_partProgName.TryGetValue(partName, out string progName))
-                return false;  // Not in any progressive chain — always unlockable.
-            int requiredTier = _partProgTier[partName];
-            _progressiveCounts.TryGetValue(progName, out int count);
-            return count < requiredTier;
-        }
-
-        public void TrackReceivedPart(string partName)
-        {
-            _receivedParts.Add(partName);
-        }
-
-        public string GetPartProgressiveName(string partName)
-        {
-            return _partProgName.TryGetValue(partName, out string name) ? name : null;
-        }
-
-        public int GetPartRequiredTier(string partName)
-        {
-            return _partProgTier.TryGetValue(partName, out int tier) ? tier : 0;
         }
 
         // Internal notification callback for UI.
@@ -908,7 +597,6 @@ namespace KSPArchipelago
         {
             RDLevel = 0;
             _progressiveCounts = new Dictionary<string, int>();
-            _receivedParts = new HashSet<string>();
             // Career-mode facility levels are progressive state too. If we
             // don't zero them here, ProcessAllItems re-walking
             // AllItemsReceived (called on _needsReset from VAB entry/exit
@@ -1191,49 +879,11 @@ namespace KSPArchipelago
                 }
                 else missing.Add("node_bands");
 
-                ProgressiveTiers = new Dictionary<string, Dictionary<int, List<string>>>();
-                if (sd.TryGetValue("progressive_tiers", out object ptObj) && ptObj is JObject ptDict)
-                {
-                    foreach (var prog in ptDict)
-                    {
-                        var tierMap = new Dictionary<int, List<string>>();
-                        if (prog.Value is JObject tiers)
-                        {
-                            foreach (var tier in tiers)
-                                tierMap[int.Parse(tier.Key)] = tier.Value.ToObject<List<string>>();
-                        }
-                        ProgressiveTiers[prog.Key] = tierMap;
-                    }
-                }
-                else missing.Add("progressive_tiers");
-
                 // Optional: launch-pad mass-cap progression (only present when option enabled).
                 if (sd.TryGetValue("progressive_launch_pad_caps", out object padObj) && padObj is JArray padArr)
                 {
                     LaunchPadMassCaps = padArr.ToObject<List<float>>();
                 }
-
-                // Optional: server-side tier-lock toggle. Absent in older
-                // slot_data — field initializer's `true` matches what
-                // generation has always assumed.
-                if (sd.TryGetValue("tier_lock_enabled", out object tlObj))
-                    ServerTierLockEnabled = Convert.ToBoolean(tlObj);
-
-                ProgressiveRepresentatives = new Dictionary<string, Dictionary<int, string>>();
-                if (sd.TryGetValue("progressive_representatives", out object prObj) && prObj is JObject prDict)
-                {
-                    foreach (var prog in prDict)
-                    {
-                        var repMap = new Dictionary<int, string>();
-                        if (prog.Value is JObject reps)
-                        {
-                            foreach (var rep in reps)
-                                repMap[int.Parse(rep.Key)] = (string)rep.Value;
-                        }
-                        ProgressiveRepresentatives[prog.Key] = repMap;
-                    }
-                }
-                else missing.Add("progressive_representatives");
 
                 if (missing.Count > 0)
                 {
@@ -1251,21 +901,6 @@ namespace KSPArchipelago
                 }
 
                 ConnectedSlot = slotName;
-
-                // Build reverse lookup: part cfg_name → progressive name + tier.
-                _partProgName = new Dictionary<string, string>();
-                _partProgTier = new Dictionary<string, int>();
-                foreach (var prog in ProgressiveTiers)
-                {
-                    foreach (var tier in prog.Value)
-                    {
-                        foreach (string partName in tier.Value)
-                        {
-                            _partProgName[partName] = prog.Key;
-                            _partProgTier[partName] = tier.Key;
-                        }
-                    }
-                }
 
                 // Minimal drain handler: keeps AP library internal state clean.
                 // All real processing happens on the main thread via Update().
@@ -1351,11 +986,6 @@ namespace KSPArchipelago
             lock (sessionLock)
             {
                 gameLoaded = true;
-                // A different save is being loaded — the new save's
-                // TierLockMode (read in the upcoming ApScenarioModule.OnLoad)
-                // should take precedence over any dirty value left over from
-                // the previous session.
-                _tierLockModeDirty = false;
                 // ApScenarioModule.OnLoad will have restored AwardedItemIndices
                 // from the save file before Update() runs the rebuild.
                 _needsReset = true;
