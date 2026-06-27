@@ -19,23 +19,28 @@ namespace KSPArchipelago.Contracts.Primitives
     /// <c>"ModuleResourceHarvester"</c>). One system per parameter; the generator
     /// emits several for an implicit AND. DLC/mod-robust and self-tracking.
     /// </summary>
-    public sealed class HasSystemPrimitive : IContractPrimitive
+    public sealed class HasSystemPrimitive : ContractPrimitiveBase<HasSystemPrimitive.Spec>
     {
-        public string Kind => "has_system";
+        public override string Kind => "has_system";
 
-        public ContractParameter Build(JObject spec)
+        public struct Spec { public string System; public string Label; }
+
+        protected override Spec Parse(JObject spec)
         {
             string system = (string)spec["system"];
             if (string.IsNullOrEmpty(system))
                 throw new FormatException("has_system primitive missing 'system'");
-            string label = (string)spec["label"] ?? system;
+            return new Spec { System = system, Label = (string)spec["label"] ?? system };
+        }
 
+        protected override ContractParameter BuildFrom(Spec p)
+        {
             // ctor: (checkModuleTypes, checkModuleDescriptions, vesselDescription,
             //        mannedStatus, requireNew)
             return new VesselSystemsParameter(
-                new List<string> { system },
-                new List<string> { label },
-                label,
+                new List<string> { p.System },
+                new List<string> { p.Label },
+                p.Label,
                 MannedStatus.ANY,
                 false);
         }

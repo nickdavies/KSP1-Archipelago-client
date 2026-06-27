@@ -16,24 +16,25 @@ namespace KSPArchipelago.Contracts.Primitives
     /// &lt;vesselName&gt;"); it does NOT create a specific-vessel requirement,
     /// so we pass a generic word rather than leaving it blank.
     /// </summary>
-    public sealed class ResourcePrimitive : IContractPrimitive
+    public sealed class ResourcePrimitive : ContractPrimitiveBase<ResourcePrimitive.Spec>
     {
-        public string Kind => "resource";
+        public override string Kind => "resource";
 
-        public ContractParameter Build(JObject spec)
+        public struct Spec { public string Resource; public double Min; }
+
+        protected override Spec Parse(JObject spec)
         {
             string resource = (string)spec["resource"];
             if (string.IsNullOrEmpty(resource))
                 throw new FormatException("resource primitive missing 'resource'");
-
             JToken minTok = spec["min"];
             if (minTok == null)
-                throw new FormatException(
-                    $"resource primitive for '{resource}' missing 'min'");
-            double min = (double)minTok;
-
-            // ctor: (resourceName, resourceTitle, vesselName, goalResource)
-            return new ResourcePossessionParameter(resource, resource, "vessel", min);
+                throw new FormatException($"resource primitive for '{resource}' missing 'min'");
+            return new Spec { Resource = resource, Min = (double)minTok };
         }
+
+        protected override ContractParameter BuildFrom(Spec p)
+            // ctor: (resourceName, resourceTitle, vesselName, goalResource)
+            => new ResourcePossessionParameter(p.Resource, p.Resource, "vessel", p.Min);
     }
 }

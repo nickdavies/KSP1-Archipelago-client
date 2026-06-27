@@ -19,39 +19,57 @@ namespace KSPArchipelago.Contracts.Primitives
     /// The raw ESCAPING situation would be too strict — a flyby that captures
     /// into orbit would never tick.
     /// </summary>
-    public sealed class SituationPrimitive : IContractPrimitive
+    public sealed class SituationPrimitive : ContractPrimitiveBase<SituationPrimitive.Spec>
     {
-        public string Kind => "situation";
+        public override string Kind => "situation";
 
-        public ContractParameter Build(JObject spec)
+        public struct Spec
+        {
+            public string SituationStr;
+            public string BodyName;            // optional (required only for flyby)
+            public bool IsFlyby;
+            public Vessel.Situations Situation; // valid when !IsFlyby
+        }
+
+        protected override Spec Parse(JObject spec)
         {
             string situationStr = (string)spec["situation"];
             if (string.IsNullOrEmpty(situationStr))
                 throw new FormatException("situation primitive missing 'situation'");
-
             string bodyName = (string)spec["body"];
+            bool isFlyby = situationStr == "flyby";
+            if (isFlyby && string.IsNullOrEmpty(bodyName))
+                throw new FormatException("flyby situation requires a body");
+            return new Spec
+            {
+                SituationStr = situationStr,
+                BodyName = bodyName,
+                IsFlyby = isFlyby,
+                // ParseSituation throws on an unknown situation (skip for flyby,
+                // which isn't a Vessel.Situations value).
+                Situation = isFlyby ? default(Vessel.Situations) : ParseSituation(situationStr),
+            };
+        }
+
+        protected override ContractParameter BuildFrom(Spec p)
+        {
             CelestialBody body = null;
-            if (!string.IsNullOrEmpty(bodyName))
+            if (!string.IsNullOrEmpty(p.BodyName))
             {
-                body = FlightGlobals.GetBodyByName(bodyName);
+                body = FlightGlobals.GetBodyByName(p.BodyName);
                 if (body == null)
-                    throw new FormatException($"situation primitive: unknown body '{bodyName}'");
+                    throw new FormatException($"situation primitive: unknown body '{p.BodyName}'");
             }
 
-            if (situationStr == "flyby")
-            {
-                if (body == null)
-                    throw new FormatException("flyby situation requires a body");
-                return new EnterSOI(body);
-            }
+            if (p.IsFlyby)
+                return new EnterSOI(body);   // body required by Parse, so non-null
 
-            Vessel.Situations situation = ParseSituation(situationStr);
             if (body == null)
-                return new ReachSituation(situation, situationStr);
+                return new ReachSituation(p.Situation, p.SituationStr);
 
             // The third arg is a cosmetic noun ("Land your <noun> on <body>");
             // completion uses targetBody + targetSituation, not the noun.
-            return new LocationAndSituationParameter(body, situation, "vessel");
+            return new LocationAndSituationParameter(body, p.Situation, "vessel");
         }
 
         private static Vessel.Situations ParseSituation(string s)

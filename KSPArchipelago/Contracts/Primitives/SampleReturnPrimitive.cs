@@ -19,15 +19,20 @@ namespace KSPArchipelago.Contracts.Primitives
     /// apply). If strict sample-only is wanted later, a custom recover param
     /// mirroring MissionTracker's surfaceSample detection is the upgrade.
     /// </summary>
-    public sealed class SampleReturnPrimitive : IContractPrimitive
+    public sealed class SampleReturnPrimitive : ContractPrimitiveBase<string>
     {
-        public string Kind => "sample_return";
+        public override string Kind => "sample_return";
 
-        public ContractParameter Build(JObject spec)
+        protected override string Parse(JObject spec)
         {
             string bodyName = (string)spec["body"];
             if (string.IsNullOrEmpty(bodyName))
                 throw new FormatException("sample_return primitive missing 'body'");
+            return bodyName;
+        }
+
+        protected override ContractParameter BuildFrom(string bodyName)
+        {
             CelestialBody body = FlightGlobals.GetBodyByName(bodyName);
             if (body == null)
                 throw new FormatException($"sample_return primitive: unknown body '{bodyName}'");

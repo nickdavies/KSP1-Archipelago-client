@@ -9,21 +9,24 @@ namespace KSPArchipelago.Contracts.Primitives
     /// <c>{ "kind": "rescue", "body": "Mun" }</c>
     ///
     /// Builds a <see cref="RescueKerbalParameter"/>, which SPAWNS a stranded
-    /// Kerbal in low orbit of the body and completes when they are recovered.
-    /// This is the only primitive that creates world state rather than watching
-    /// the player's vessel — the free-seat requirement rides as a separate
+    /// Kerbal in orbit of the body and completes when they are recovered. This is
+    /// the only primitive that creates world state rather than watching the
+    /// player's vessel — the free-seat requirement rides as a separate
     /// has_any_part objective emitted by the generator.
     /// </summary>
-    public sealed class RescuePrimitive : IContractPrimitive
+    public sealed class RescuePrimitive : ContractPrimitiveBase<string>
     {
-        public string Kind => "rescue";
+        public override string Kind => "rescue";
 
-        public ContractParameter Build(JObject spec)
+        protected override string Parse(JObject spec)
         {
-            string bodyName = (string)spec["body"];
-            if (string.IsNullOrEmpty(bodyName))
+            string body = (string)spec["body"];
+            if (string.IsNullOrEmpty(body))
                 throw new FormatException("rescue primitive missing 'body'");
-            return new RescueKerbalParameter(bodyName);
+            return body;
         }
+
+        protected override ContractParameter BuildFrom(string body)
+            => new RescueKerbalParameter(body);
     }
 }

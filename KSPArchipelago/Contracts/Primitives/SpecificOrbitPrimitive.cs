@@ -16,30 +16,47 @@ namespace KSPArchipelago.Contracts.Primitives
     /// <c>MNA</c>/<c>epoch</c> are 0 for the circular orbits the generator emits and
     /// are not sent over the wire.
     /// </summary>
-    public sealed class SpecificOrbitPrimitive : IContractPrimitive
+    public sealed class SpecificOrbitPrimitive : ContractPrimitiveBase<SpecificOrbitPrimitive.Spec>
     {
-        public string Kind => "specific_orbit";
+        public override string Kind => "specific_orbit";
 
-        public ContractParameter Build(JObject spec)
+        public struct Spec
+        {
+            public string BodyName;
+            public OrbitType OrbitType;
+            public double Inclination, Eccentricity, Sma, Deviation;
+        }
+
+        protected override Spec Parse(JObject spec)
         {
             string bodyName = (string)spec["body"];
             if (string.IsNullOrEmpty(bodyName))
                 throw new FormatException("specific_orbit primitive missing 'body'");
-            CelestialBody body = FlightGlobals.GetBodyByName(bodyName);
-            if (body == null)
-                throw new FormatException($"specific_orbit primitive: unknown body '{bodyName}'");
+            double? sma = spec.Value<double?>("sma");
+            if (sma == null || sma.Value <= 0.0)
+                throw new FormatException("specific_orbit primitive missing 'sma'");
+            return new Spec
+            {
+                BodyName = bodyName,
+                OrbitType = ParseOrbitType((string)spec["orbit_type"]),  // throws on unknown
+                Inclination = spec.Value<double>("inclination"),
+                Eccentricity = spec.Value<double>("eccentricity"),
+                Sma = sma.Value,
+                Deviation = spec.Value<double?>("deviation") ?? 10.0,
+            };
+        }
 
-            OrbitType orbitType = ParseOrbitType((string)spec["orbit_type"]);
-            double inclination = spec.Value<double>("inclination");
-            double eccentricity = spec.Value<double>("eccentricity");
-            double sma = spec.Value<double>("sma");
-            double deviation = spec.Value<double?>("deviation") ?? 10.0;
+        protected override ContractParameter BuildFrom(Spec p)
+        {
+            CelestialBody body = FlightGlobals.GetBodyByName(p.BodyName);
+            if (body == null)
+                throw new FormatException($"specific_orbit primitive: unknown body '{p.BodyName}'");
 
             // ctor: (orbitType, inclination, eccentricity, sma, lan,
             //        argumentOfPeriapsis, meanAnomalyAtEpoch, epoch, body, deviationWindow)
             return new SpecificOrbitParameter(
-                orbitType, inclination, eccentricity, sma,
-                0.0, 0.0, 0.0, 0.0, body, deviation);
+                p.OrbitType, p.Inclination, p.Eccentricity, p.Sma,
+                0.0, 0.0, 0.0, 0.0, body, p.Deviation);
         }
 
         private static OrbitType ParseOrbitType(string s)

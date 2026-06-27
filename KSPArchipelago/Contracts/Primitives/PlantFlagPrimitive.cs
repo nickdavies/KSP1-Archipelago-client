@@ -12,15 +12,20 @@ namespace KSPArchipelago.Contracts.Primitives
     /// flag on <c>body</c> (which implies a crewed surface EVA there). Self-tracks
     /// via GameEvents.onFlagPlant; no host contract entity required.
     /// </summary>
-    public sealed class PlantFlagPrimitive : IContractPrimitive
+    public sealed class PlantFlagPrimitive : ContractPrimitiveBase<string>
     {
-        public string Kind => "plant_flag";
+        public override string Kind => "plant_flag";
 
-        public ContractParameter Build(JObject spec)
+        protected override string Parse(JObject spec)
         {
             string bodyName = (string)spec["body"];
             if (string.IsNullOrEmpty(bodyName))
                 throw new FormatException("plant_flag primitive missing 'body'");
+            return bodyName;
+        }
+
+        protected override ContractParameter BuildFrom(string bodyName)
+        {
             CelestialBody body = FlightGlobals.GetBodyByName(bodyName);
             if (body == null)
                 throw new FormatException($"plant_flag primitive: unknown body '{bodyName}'");

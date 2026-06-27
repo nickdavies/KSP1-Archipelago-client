@@ -76,10 +76,23 @@ namespace KSPArchipelago.Contracts.Primitives
             foreach (JObject paramSpec in spec.Parameters)
             {
                 string kind = (string)paramSpec["kind"];
-                if (!Supports(kind))
+                if (!_byKind.TryGetValue(kind, out IContractPrimitive primitive))
                     throw new FormatException(
                         $"contract '{spec.Location}' uses unknown primitive kind "
                         + $"'{kind}' (client schema {Schema}); update the client mod.");
+                // Field-level check (thread-safe, no Unity): reject a seed whose
+                // parameter is missing/invalid required data NOW, at connect, so
+                // an unusable contract can never strand its AP location mid-run.
+                try
+                {
+                    primitive.Validate(paramSpec);
+                }
+                catch (Exception ex)
+                {
+                    throw new FormatException(
+                        $"contract '{spec.Location}' has an unusable '{kind}' "
+                        + $"parameter: {ex.Message}", ex);
+                }
             }
         }
 

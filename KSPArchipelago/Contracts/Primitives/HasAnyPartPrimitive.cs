@@ -15,11 +15,13 @@ namespace KSPArchipelago.Contracts.Primitives
     /// the client never needs part/DLC knowledge. <c>label</c> is the category
     /// name, used only for the parameter title.
     /// </summary>
-    public sealed class HasAnyPartPrimitive : IContractPrimitive
+    public sealed class HasAnyPartPrimitive : ContractPrimitiveBase<HasAnyPartPrimitive.Spec>
     {
-        public string Kind => "has_any_part";
+        public override string Kind => "has_any_part";
 
-        public ContractParameter Build(JObject spec)
+        public struct Spec { public List<string> Parts; public string Label; }
+
+        protected override Spec Parse(JObject spec)
         {
             var parts = new List<string>();
             if (spec["parts"] is JArray arr)
@@ -32,9 +34,10 @@ namespace KSPArchipelago.Contracts.Primitives
             }
             if (parts.Count == 0)
                 throw new FormatException("has_any_part primitive has no 'parts'");
-
-            string label = (string)spec["label"] ?? "";
-            return new VesselHasPartParameter(parts, label);
+            return new Spec { Parts = parts, Label = (string)spec["label"] ?? "" };
         }
+
+        protected override ContractParameter BuildFrom(Spec p)
+            => new VesselHasPartParameter(p.Parts, p.Label);
     }
 }

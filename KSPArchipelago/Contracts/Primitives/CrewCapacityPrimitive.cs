@@ -14,17 +14,19 @@ namespace KSPArchipelago.Contracts.Primitives
     /// `situation` parameter — this one only counts seats. Self-tracks via
     /// onVesselWasModified / onPartDie; no host contract entity required.
     /// </summary>
-    public sealed class CrewCapacityPrimitive : IContractPrimitive
+    public sealed class CrewCapacityPrimitive : ContractPrimitiveBase<int>
     {
-        public string Kind => "crew_capacity";
+        public override string Kind => "crew_capacity";
 
-        public ContractParameter Build(JObject spec)
+        protected override int Parse(JObject spec)
         {
             JToken minTok = spec["min"];
             if (minTok == null)
                 throw new FormatException("crew_capacity primitive missing 'min'");
-            int min = (int)minTok;
-            return new CrewCapacityParameter(min);
+            return (int)minTok;
         }
+
+        protected override ContractParameter BuildFrom(int min)
+            => new CrewCapacityParameter(min);
     }
 }
