@@ -204,43 +204,6 @@ namespace KSPArchipelago
             }
         }
 
-// Dump every context-menu button we've never seen before. Tracks by
-        // parent name so each facility's menu is dumped on first open.
-        private readonly HashSet<string> _dumpedContextMenus = new HashSet<string>();
-
-        private void ScanAndDumpUnseenContextMenus()
-        {
-            foreach (Button b in GameObject.FindObjectsOfType<Button>())
-            {
-                if (b == null) continue;
-                Transform parent = b.transform.parent;
-                if (parent == null) continue;
-                if (!parent.name.EndsWith(" Context Menu")) continue;
-                string menuName = parent.name;
-                if (_dumpedContextMenus.Contains(menuName)) continue;
-                _dumpedContextMenus.Add(menuName);
-                // On first sight of a context menu, walk its parent and log
-                // every Button child so we can identify e.g. Launch vs Upgrade.
-                Debug.Log($"[KSP-AP] === Context menu first seen: '{menuName}' ===");
-                foreach (Button sibling in parent.GetComponentsInChildren<Button>(true))
-                {
-                    Debug.Log($"[KSP-AP]   button name='{sibling.name}' "
-                            + $"active={sibling.gameObject.activeInHierarchy} "
-                            + $"interactable={sibling.interactable} "
-                            + $"path='{GetPath(sibling.transform)}'");
-                }
-            }
-        }
-
-        private static string GetPath(Transform t)
-        {
-            if (t == null) return "<null>";
-            var s = t.name;
-            var p = t.parent;
-            while (p != null) { s = p.name + "/" + s; p = p.parent; }
-            return s;
-        }
-
         private IEnumerator ReapplyApGrantedLevelsNextFrame()
         {
             yield return null; // wait one frame
@@ -280,7 +243,6 @@ namespace KSPArchipelago
             if (HighLogic.CurrentGame == null
                 || HighLogic.CurrentGame.Mode != Game.Modes.CAREER) return;
             ScanAndHijackUpgradeButtons();
-            ScanAndDumpUnseenContextMenus();
         }
 
         private void ScanAndHijackUpgradeButtons()
