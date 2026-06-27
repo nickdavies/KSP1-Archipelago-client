@@ -119,6 +119,10 @@ namespace KSPArchipelago
             if (upgrades == null || _directives == null) return;
             foreach (var kv in _directives.BuildingLevels)
                 upgrades.SetApGrantedLevel(kv.Key, kv.Value);
+            // The AP-granted cap is now authoritative — let the POST-revert
+            // begin enforcing it (it was gated until this first apply so the
+            // connect-time materialiser couldn't clamp facilities to 0).
+            upgrades.MarkBaselineApplied();
         }
 
         private void AssertFunds()

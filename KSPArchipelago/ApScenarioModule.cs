@@ -85,6 +85,10 @@ namespace KSPArchipelago
                     if (!int.TryParse(pair.Substring(eq + 1), out int level)) continue;
                     CareerUpgradesManager.Instance.SetApGrantedLevel(facilityId, level);
                 }
+                // Restored AP-granted levels are authoritative — open the
+                // POST-revert gate so it enforces them even if the player
+                // doesn't reconnect this session (no career-directive apply).
+                CareerUpgradesManager.Instance.MarkBaselineApplied();
             }
         }
     }

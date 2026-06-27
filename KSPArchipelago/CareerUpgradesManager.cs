@@ -85,6 +85,21 @@ namespace KSPArchipelago
         private readonly Dictionary<string, int> _apGrantedLevel
             = new Dictionary<string, int>();
 
+        // True once CareerHackManager has pushed the real per-facility levels
+        // from the `career` slot_data block, i.e. the AP-granted cap is now
+        // authoritative. Until then _apGrantedLevel holds the all-zero default,
+        // which must NOT be used to revert facilities (see OnFacilityUpgraded):
+        // at connect the alien-KSC materialiser brings facilities up to their
+        // saved level and fires OnKSCFacilityUpgraded while this is still the
+        // default 0, and an ungated revert would clamp every building to 0
+        // until the next Space Center entry re-applied the stored levels.
+        private bool _baselineApplied = false;
+
+        // Called by CareerHackManager after it applies the career directives'
+        // building_levels, marking the AP-granted cap authoritative so the
+        // POST-revert may begin enforcing it.
+        public void MarkBaselineApplied() => _baselineApplied = true;
+
         // Hijacked button instances, identified by Unity instance id so we
         // don't re-hijack the same Button across multiple scans.
         private readonly HashSet<int> _hijackedIds = new HashSet<int>();
@@ -238,6 +253,9 @@ namespace KSPArchipelago
                 if (storedLevel <= liveLevel) continue;
                 Debug.Log($"[KSP-AP] Re-applying AP-granted upgrade on '{facilityId}': "
                         + $"liveLevel={liveLevel} -> storedLevel={storedLevel}");
+                // Mark our own SetLevel as expected so its async upgrade event
+                // isn't reverted by POST-revert (see ApplyLevelToLiveFacility).
+                _expectedStableLevel[facilityId] = storedLevel;
                 try { f.SetLevel(storedLevel); }
                 catch (Exception ex)
                 {
@@ -365,6 +383,14 @@ namespace KSPArchipelago
                 return;
             }
 
+            // Don't enforce the AP-granted cap until the career directives have
+            // established the real baseline. Before that, _apGrantedLevel is the
+            // all-zero default; reverting against it at connect clamps the
+            // materialiser's level-2 facilities to 0 (the recover-on-next-SC-entry
+            // bug). Once CareerHackManager.ApplyBuildingLevels has run, the cap
+            // is authoritative and normal POST-revert protection resumes.
+            if (!_baselineApplied) return;
+
             int allowed;
             if (!_apGrantedLevel.TryGetValue(facilityId, out allowed))
             {
@@ -474,6 +500,14 @@ namespace KSPArchipelago
             }
             try
             {
+                // KSP fires OnKSCFacilityUpgraded ASYNCHRONOUSLY (a frame or two
+                // later). By then _apGrantedLevel may have been zeroed by a
+                // ResetApGrantedLevels (the per-rebuild reset), so the POST-revert
+                // would see newLvl > allowed=0 and clamp our just-applied level
+                // straight back to 0. Mark this as an expected, AP-driven level
+                // so the revert ignores OUR OWN upgrade event (the same mechanism
+                // the KSC materialiser uses for its temporary SetLevels).
+                _expectedStableLevel[facilityId] = level;
                 facility.SetLevel(level);
                 Debug.Log($"[KSP-AP] SetLevel({level}) applied to '{facilityId}' "
                         + $"(was live={liveLevel})");
