@@ -25,15 +25,22 @@ namespace KSPArchipelago.Contracts.Parameters
     {
         public string BodyName = "";
         public string KerbalName = "";
+        // Server-seeded orbit radius from the body centre, metres (the rescue
+        // primitive's required "sma"; circular ⇒ sma == radius). The generator
+        // picks it collision-safe against moon SOIs and models the rescue dv to
+        // it, so honouring it keeps the contract's logic cost and the spawned
+        // target in agreement.
+        public double Sma = 0.0;
         private bool _spawned = false;        // true only once a vessel actually exists
         private uint _strandedVesselId = 0;
         private float _nextAttempt = 0f;      // in-memory retry throttle (not persisted)
 
         public RescueKerbalParameter() { }
 
-        public RescueKerbalParameter(string bodyName)
+        public RescueKerbalParameter(string bodyName, double sma)
         {
             BodyName = bodyName ?? "";
+            Sma = sma;
         }
 
         protected override string GetTitle()
@@ -87,6 +94,14 @@ namespace KSPArchipelago.Contracts.Parameters
                     _spawned = true;
                     return;
                 }
+                if (Sma <= 0.0)
+                {
+                    // Valid seeds always carry a positive sma (required at parse);
+                    // a zero here is only a pre-sma save — nothing safe to spawn.
+                    Debug.LogWarning($"[KSP-AP] rescue: no seeded orbit (sma) for '{BodyName}', giving up");
+                    _spawned = true;
+                    return;
+                }
 
                 // Resolve a crewed command pod defensively. A hard-coded
                 // "mk1pod_v2" returned null from getPartInfoByName at runtime
@@ -111,11 +126,7 @@ namespace KSPArchipelago.Contracts.Parameters
                     HighLogic.CurrentGame.flightState);
                 ConfigNode partNode = ProtoVessel.CreatePartNode(
                     pod.name, flightId, kerbal);
-                double floor = body.Radius * 0.12
-                    + (body.atmosphere ? body.atmosphereDepth : 0.0);
-                double ceil = floor + body.Radius * 0.25;
-                Orbit orbit = Orbit.CreateRandomOrbitAround(
-                    body, body.Radius + floor, body.Radius + ceil);
+                Orbit orbit = BuildOrbit(body);
                 ConfigNode vesselNode = ProtoVessel.CreateVesselNode(
                     "Stranded " + KerbalName, VesselType.Ship, orbit, 0,
                     new[] { partNode });
@@ -176,6 +187,17 @@ namespace KSPArchipelago.Contracts.Parameters
                 ProtoCrewMember.KerbalType.Unowned);
         }
 
+        // The orbit to spawn the stranded vessel in: a circular EQUATORIAL orbit
+        // at the server-seeded Sma radius from the body centre — the orbit the
+        // generator modelled the dv against and verified clear of moon SOIs. A
+        // random phase keeps concurrent rescues from stacking.
+        private Orbit BuildOrbit(CelestialBody body)
+        {
+            double phase = UnityEngine.Random.Range(0f, (float)(2.0 * Math.PI));
+            return new Orbit(0.0, 0.0, Sma, 0.0, 0.0, phase,
+                             Planetarium.GetUniversalTime(), body);
+        }
+
         // First loaded crewable command pod. Tries the common stock pods by name,
         // then falls back to scanning every loaded part for a crew-carrying
         // command module so a renamed/missing pod can never break the rescue.
@@ -221,6 +243,7 @@ namespace KSPArchipelago.Contracts.Parameters
         {
             node.AddValue("body", BodyName);
             node.AddValue("kerbal", KerbalName);
+            node.AddValue("sma", Sma);
             node.AddValue("spawned", _spawned);
             node.AddValue("stranded_id", _strandedVesselId);
         }
@@ -229,6 +252,7 @@ namespace KSPArchipelago.Contracts.Parameters
         {
             BodyName = node.GetValue("body") ?? "";
             KerbalName = node.GetValue("kerbal") ?? "";
+            double.TryParse(node.GetValue("sma"), out Sma);
             bool.TryParse(node.GetValue("spawned"), out _spawned);
             uint.TryParse(node.GetValue("stranded_id"), out _strandedVesselId);
             // Self-heal: a save where spawned=true but no vessel id was recorded
