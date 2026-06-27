@@ -12,17 +12,19 @@ namespace KSPArchipelago.Contracts.Primitives
     /// build time. This is the runtime half of the client/server drift
     /// mitigation (version handshake + whitelist).
     ///
-    /// Schema 4 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
+    /// Schema 5 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
     /// <c>crew_capacity</c>, <c>plant_flag</c>, <c>sample_return</c>, <c>has_system</c>,
     /// <c>specific_orbit</c>, <c>collect_science</c>, <c>rescue</c>. (Schema 3
     /// changed the wire format: a single <c>location</c> became a <c>locations</c>
     /// array. Schema 4 added the <c>rescue</c> primitive, which spawns a stranded
-    /// Kerbal — the only world-mutating primitive.)
+    /// Kerbal — the only world-mutating primitive. Schema 5 lets a non-goal
+    /// contract's <c>locations</c> array hold more than 2 entries; the parser
+    /// already reads it as a variable-length list, so no new vocabulary.)
     /// </summary>
     public static class ContractPrimitiveRegistry
     {
         /// <summary>Highest primitive-registry schema this client understands.</summary>
-        public const int Schema = 4;
+        public const int Schema = 5;
 
         private static readonly Dictionary<string, IContractPrimitive> _byKind
             = new Dictionary<string, IContractPrimitive>(StringComparer.Ordinal);
