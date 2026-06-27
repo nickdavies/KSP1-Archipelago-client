@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Contracts;
 using UnityEngine;
 
@@ -34,6 +35,7 @@ namespace KSPArchipelago.Contracts.Parameters
         private bool _spawned = false;        // true only once a vessel actually exists
         private uint _strandedVesselId = 0;
         private float _nextAttempt = 0f;      // in-memory retry throttle (not persisted)
+        private Part _pendingEvaEquip = null; // EVA part awaiting a jetpack top-up (not persisted)
 
         public RescueKerbalParameter() { }
 
@@ -55,17 +57,76 @@ namespace KSPArchipelago.Contracts.Parameters
         protected override void OnRegister()
         {
             GameEvents.onVesselRecovered.Add(OnVesselRecovered);
+            GameEvents.onCrewOnEva.Add(OnCrewOnEva);
         }
 
         protected override void OnUnregister()
         {
             GameEvents.onVesselRecovered.Remove(OnVesselRecovered);
+            GameEvents.onCrewOnEva.Remove(OnCrewOnEva);
+        }
+
+        // When OUR stranded kerbal goes on EVA (the player rescuing them), make sure
+        // they carry an EVA jetpack + parachute even if the player hasn't unlocked
+        // evaJetpack — without it the rescuee can't fly to the rescue craft. KSP's
+        // default kerbal inventory is tech-gated (SetInventoryDefaults skips parts
+        // ResearchAndDevelopment.PartModelPurchased reports as not unlocked), but the
+        // rescue NPC's gear is not the player's tech. The loaded kerbalEVA inventory
+        // module is already initialized, so we store straight into it —
+        // StoreCargoPartAtSlot has no tech gate.
+        private void OnCrewOnEva(GameEvents.FromToAction<Part, Part> action)
+        {
+            // Only QUEUE the top-up here. onCrewOnEva fires while the kerbalEVA's
+            // inventory module is still spinning up (storedParts is null for a frame
+            // or two), so storing immediately NREs — TryEquipPendingEva (OnUpdate)
+            // waits until the module is initialized.
+            Part evaPart = action.to;
+            Vessel evaVessel = evaPart?.vessel;
+            if (evaVessel == null || string.IsNullOrEmpty(KerbalName)) return;
+            List<ProtoCrewMember> crew = evaVessel.GetVesselCrew();
+            if (crew == null) return;
+            foreach (ProtoCrewMember c in crew)
+                if (c != null && c.name == KerbalName) { _pendingEvaEquip = evaPart; return; }
+        }
+
+        // Force the EVA jetpack + parachute into the EVA inventory module even if the
+        // player hasn't unlocked evaJetpack — the rescue NPC's gear isn't the player's
+        // tech, and without a jetpack the rescuee can't fly to the rescue craft.
+        // StoreCargoPartAtSlot has no tech gate. Retries each frame until the module's
+        // storedParts is ready, then clears the request.
+        private void TryEquipPendingEva()
+        {
+            try
+            {
+                Part p = _pendingEvaEquip;
+                if (p == null || p.vessel == null) { _pendingEvaEquip = null; return; }
+                ModuleInventoryPart inv = p.FindModuleImplementing<ModuleInventoryPart>();
+                if (inv == null) { _pendingEvaEquip = null; return; }
+                if (inv.storedParts == null) return;   // not initialized yet — try next frame
+                foreach (string partName in new[] { "evaJetpack", "evaChute" })
+                {
+                    if (inv.ContainsPart(partName)) continue;
+                    AvailablePart ap = PartLoader.getPartInfoByName(partName);
+                    if (ap?.partPrefab == null) continue;
+                    inv.StoreCargoPartAtSlot(ap.partPrefab, inv.FirstEmptySlot());
+                }
+                _pendingEvaEquip = null;
+                Debug.Log($"[KSP-AP] rescue: equipped stranded {KerbalName} with EVA jetpack + parachute");
+            }
+            catch (Exception ex)
+            {
+                _pendingEvaEquip = null;
+                Debug.LogWarning($"[KSP-AP] rescue: could not equip EVA loadout: {ex.Message}");
+            }
         }
 
         protected override void OnUpdate()
         {
             if (Root == null || Root.ContractState != Contract.State.Active) return;
             if (state == ParameterState.Complete) return;
+            // EVA jetpack top-up, deferred from onCrewOnEva until the EVA inventory
+            // module finishes initializing (runs regardless of spawn state).
+            if (_pendingEvaEquip != null) TryEquipPendingEva();
             if (_spawned) return;
             // Retry throttle: a transient failure (scene not ready, no pod yet)
             // must not spam every tick, but must also never latch permanently —
@@ -186,6 +247,7 @@ namespace KSPArchipelago.Contracts.Parameters
             return HighLogic.CurrentGame.CrewRoster.GetNewKerbal(
                 ProtoCrewMember.KerbalType.Unowned);
         }
+
 
         // The orbit to spawn the stranded vessel in: a circular EQUATORIAL orbit
         // at the server-seeded Sma radius from the body centre — the orbit the
