@@ -20,8 +20,10 @@ namespace KSPArchipelago
     [KSPAddon(KSPAddon.Startup.MainMenu, false)]
     public class MainMenuFlagDefault : MonoBehaviour
     {
-        // GameData-relative URL of the flag shipped at assets/Flags/AP.png.
-        private const string ApFlagUrl = "KSPArchipelago/Flags/AP";
+        // GameData-relative URL of the default AP flag. Shipped from
+        // assets/Flags/AP_planets_drawn.png into the mod's FlagsAgency folder,
+        // so the AP flags land in the flag browser's "Agency" tab.
+        private const string ApFlagUrl = "KSPArchipelago/FlagsAgency/AP_planets_drawn";
 
         private bool applied;
 
