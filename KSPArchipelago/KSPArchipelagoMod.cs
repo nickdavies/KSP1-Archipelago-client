@@ -80,17 +80,20 @@ namespace KSPArchipelago
                 return;
             }
 
-            // Progressive Launch Pad: raise the buildable launch-mass cap.
-            // Drives BOTH the legacy artificial cap (for backwards-compat
-            // with existing seeds) AND the new Career-mode facility level
-            // pipeline (CareerUpgradesManager.SetLevel + LiveLimitsSync ->
-            // KKLaunchSite.MaxCraftMass), so both VAB editor display and
-            // alien KK pad enforcement update for free.
+            // Progressive Launch Pad: raise the buildable launch-mass cap. The
+            // server provides the cap thresholds; the collected count selects
+            // the current one (CurrentLaunchPadMassCap). SyncLaunchPadMassCap
+            // writes that into the building (stock VAB display + alien KK pad
+            // MaxCraftMass via the GetCraftMassLimit override); the over-cap
+            // detonator enforces it as a hard backstop on the pad. The cap is
+            // NOT driven through the LaunchPad facility level — the career hack
+            // maxes that facility, so a level-derived cap would never bind.
             if (itemName == "Progressive Launch Pad")
             {
                 if (mod != null)
                 {
-                    int newLevel = mod.IncrementProgressiveCount(itemName);
+                    mod.IncrementProgressiveCount(itemName);
+                    mod.SyncLaunchPadMassCap();
                     if (showToast)
                     {
                         float newCap = mod.CurrentLaunchPadMassCap;
@@ -100,8 +103,6 @@ namespace KSPArchipelago
                         PostToMessageSystem(senderName, locationName, toastText);
                     }
                 }
-                CareerUpgradesManager.Instance
-                    ?.IncrementApGrantedLevel("SpaceCenter/LaunchPad");
                 return;
             }
 
@@ -335,12 +336,32 @@ namespace KSPArchipelago
             }
         }
 
+        /// <summary>
+        /// Write the current Progressive Launch Pad cap into the building so the
+        /// in-game readouts match: the GetCraftMassLimit override (stock VAB
+        /// mass display + stock pad check) and the alien KK pad's MaxCraftMass
+        /// (refreshed through the same override via the KSC bridge). The
+        /// LaunchPadOverCapDetonator reads CurrentLaunchPadMassCap directly as
+        /// the hard backstop, independent of this. Call after the collected
+        /// count changes (item receipt) and after a full item rebuild.
+        /// </summary>
+        public void SyncLaunchPadMassCap()
+        {
+            float cap = CurrentLaunchPadMassCap;
+            APCareerGameVariables.LaunchPadMassCapTonnes =
+                float.IsPositiveInfinity(cap) ? -1f : cap;
+            // Alien KK pad (if installed) recomputes MaxCraftMass through the
+            // same GetCraftMassLimit override; no-op on Kerbin / no-KK starts.
+            StartingBodyBridge.Current?.RefreshPadMassCap();
+        }
+
         // Progressive R&D: current band level (0 = base, up to 3).
         public int RDLevel { get; private set; }
         // Tech node ID → required R&D band (from slot data).
         public Dictionary<string, int> NodeBands { get; private set; }
 
         // Running count of progressive item copies received (reset on rebuild).
+        // Drives the Progressive Launch Pad mass-cap index (CurrentLaunchPadMassCap).
         private Dictionary<string, int> _progressiveCounts = new Dictionary<string, int>();
 
         // Expose connection state for the UI.
@@ -654,6 +675,10 @@ namespace KSPArchipelago
 
             _lastProcessedIndex = count;
             ItemsReceivedCount = count;
+
+            // Counts were rebuilt from scratch — re-write the pad cap into the
+            // building (covers initial connect with 0 collected: cap = caps[0]).
+            SyncLaunchPadMassCap();
 
             Debug.Log($"[KSP-AP] ProcessAllItems complete: {awarded?.Count ?? 0} total awarded");
         }

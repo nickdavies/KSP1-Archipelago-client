@@ -73,6 +73,20 @@ namespace KSPArchipelago.KSC
             sm.ApplyServerBody(spec);
         }
 
+        // Recompute the alien LaunchPad's KKLaunchSite.MaxCraftMass after the
+        // Progressive Launch Pad cap changed. Materialiser.ComputeMaxCraftMass
+        // reads through GameVariables.GetCraftMassLimit, which the main mod has
+        // just updated, so this picks up the new absolute cap. Safe no-op on
+        // Kerbin starts (no alien launch site exists).
+        public void RefreshPadMassCap()
+        {
+            try { Materialiser.UpdateAlienPadMaxCraftMass("SpaceCenter/LaunchPad"); }
+            catch (System.Exception ex)
+            {
+                Debug.LogError("[KSPArchipelago.KSC] RefreshPadMassCap failed: " + ex);
+            }
+        }
+
         // Kick the decoration-placement coroutine.  Hosted here (not on
         // SelectorScenarioModule or SelectorBootstrap) so it survives
         // scene transitions — relevant when AP connects from a non-

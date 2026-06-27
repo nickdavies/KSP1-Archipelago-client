@@ -23,6 +23,12 @@ namespace KSPArchipelago
         // persistence and (when a scene is loaded) triggering materialisation.
         void OnStartingBodyResolved(string bodyName, double lat, double lon,
                                     double terrainAlt, bool skipMapDecal);
+
+        // Called by the main mod when the Progressive Launch Pad mass cap
+        // changes (item received / item rebuild). The KK handler recomputes
+        // the alien launch site's MaxCraftMass from the (now updated)
+        // GetCraftMassLimit override. No-op on Kerbin starts (no alien site).
+        void RefreshPadMassCap();
     }
 
     public static class StartingBodyBridge

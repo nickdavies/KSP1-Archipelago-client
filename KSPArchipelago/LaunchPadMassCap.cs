@@ -25,16 +25,13 @@ namespace KSPArchipelago
         private float _lastWarnTime = -10f;
         private const float WarnIntervalSec = 1.5f;
 
-        private static KSPArchipelagoMod GetMod() =>
-            FindObjectOfType<KSPArchipelagoMod>();
-
         private void Update()
         {
             if (EditorLogic.fetch == null) return;
             var ship = EditorLogic.fetch.ship;
             if (ship == null || ship.parts == null || ship.parts.Count == 0) return;
 
-            float cap = LaunchPadGate.ComputeMassCap();
+            float cap = LaunchPadGate.ServerMassCap();
             if (float.IsPositiveInfinity(cap)) return;
 
             float mass = ship.GetTotalMass();
@@ -74,7 +71,7 @@ namespace KSPArchipelago
             if (vessel == null) return;
             if (vessel.situation != Vessel.Situations.PRELAUNCH) return;
 
-            float cap = LaunchPadGate.ComputeMassCap();
+            float cap = LaunchPadGate.ServerMassCap();
             if (float.IsPositiveInfinity(cap)) return;
 
             float mass = vessel.GetTotalMass();
@@ -125,73 +122,22 @@ namespace KSPArchipelago
         public const float GraceTonnes = 0.01f;
 
         /// <summary>
-        /// Single source of truth for the launch-pad mass cap. Reads the
-        /// LaunchPad facility's current level from KSP and looks up the
-        /// matching mass limit via GameVariables — which dispatches through
-        /// APCareerGameVariables (installed by CareerLimitsManager on Career
-        /// saves) so per-body factors are respected.
+        /// The authoritative launch-pad mass cap: the Progressive Launch Pad
+        /// server-provided thresholds indexed by the count of collected items
+        /// (KSPArchipelagoMod.CurrentLaunchPadMassCap) — the same value written
+        /// into the building via APCareerGameVariables.GetCraftMassLimit.
+        /// PositiveInfinity when the option is off or the top tier is reached.
         ///
-        /// Returns float.PositiveInfinity when no enforcement applies
-        /// (LaunchPad at max level, or no facility findable).
-        ///
-        /// This unifies the legacy LaunchPadMassCap editor warning and the
-        /// LaunchPadOverCapDetonator flight check with KK's MaxCraftMass on
-        /// the alien KK pad — both now derive from the same per-facility-level
-        /// formula, so the player never sees "VAB says X but pad blows up
-        /// at Y" again.
+        /// This READS the source of truth directly rather than deriving a cap
+        /// from the live LaunchPad facility level: the career hack maxes that
+        /// facility, so a level-derived cap would always read "unlimited". The
+        /// editor warning and the pre-launch detonator both gate on this, so
+        /// the cap binds regardless of the maxed pad.
         /// </summary>
-        public static float ComputeMassCap()
+        public static float ServerMassCap()
         {
-            // FindObjectsOfType doesn't return UpgradeableFacility in editor
-            // scenes — but the LaunchPad's FacilityLevel reads correctly via
-            // ScenarioUpgradeableFacilities even there (KK CareerState manages
-            // it). Try the live-instance path first, fall back to the
-            // ProtoUpgradeable on miss.
-            float normLevel = ReadLaunchPadNormLevel();
-            if (normLevel < 0f) return float.PositiveInfinity; // nothing to read
-            // Second arg is isVAB (probe-confirmed) — positional because
-            // Squad's parameter name differs across KSP versions.
-            float cap = GameVariables.Instance.GetCraftMassLimit(normLevel, true);
-            if (cap >= float.MaxValue / 2f) return float.PositiveInfinity;
-            return cap;
-        }
-
-        private static float ReadLaunchPadNormLevel()
-        {
-            // Live UpgradeableFacility (SpaceCenter scene + KSC scene).
-            foreach (var f in Resources.FindObjectsOfTypeAll<Upgradeables.UpgradeableFacility>())
-            {
-                if (f != null && f.name == "LaunchPad")
-                {
-                    try
-                    {
-                        // FacilityLevel is 0-indexed; KSP stock has 3 levels
-                        // (0/1/2). normLevel = level / (maxLevel) = level / 2.
-                        // MaxLevel reads from the upgradeLevels array length.
-                        int maxLevel = f.MaxLevel; // 2 for stock 3-level facilities
-                        if (maxLevel <= 0) maxLevel = 2;
-                        return (float)f.FacilityLevel / (float)maxLevel;
-                    }
-                    catch { /* fall through */ }
-                }
-            }
-            // Fallback: read from the persistent scenario node (works in any scene).
-            try
-            {
-                var proto = ScenarioUpgradeableFacilities.protoUpgradeables;
-                if (proto != null && proto.TryGetValue("SpaceCenter/LaunchPad", out var pu))
-                {
-                    if (pu?.facilityRefs != null && pu.facilityRefs.Count > 0)
-                    {
-                        var f = pu.facilityRefs[0];
-                        int maxLevel = f.MaxLevel;
-                        if (maxLevel <= 0) maxLevel = 2;
-                        return (float)f.FacilityLevel / (float)maxLevel;
-                    }
-                }
-            }
-            catch { }
-            return -1f;
+            var mod = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
+            return mod != null ? mod.CurrentLaunchPadMassCap : float.PositiveInfinity;
         }
     }
 }

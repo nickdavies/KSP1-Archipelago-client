@@ -32,6 +32,23 @@ namespace KSPArchipelago
         public static bool UnlimitedContracts = false;
 
         /// <summary>
+        /// Absolute launch-pad craft-mass cap (tonnes) from the Progressive
+        /// Launch Pad system: the server-provided cap thresholds indexed by the
+        /// count of collected "Progressive Launch Pad" items
+        /// (KSPArchipelagoMod.CurrentLaunchPadMassCap). When &gt;= 0 it REPLACES
+        /// the stock VAB/pad mass limit, so KSP's own editor readout, the stock
+        /// pre-launch check, and KK's MaxCraftMass (Materialiser.ComputeMaxCraftMass
+        /// reads through this getter) all reflect the AP cap. &lt; 0 means no
+        /// override (option disabled or top tier reached) → stock × factor.
+        ///
+        /// This is the "write the limit into the building" half: the cap is
+        /// pushed in here, not read back out of the facility level (which the
+        /// career hack maxes). Static so it survives CareerLimitsManager
+        /// re-installs (like UnlimitedContracts).
+        /// </summary>
+        public static float LaunchPadMassCapTonnes = -1f;
+
+        /// <summary>
         /// Per-getter multipliers. Keyed by the getter method name
         /// (e.g. "GetCraftMassLimit"). Missing keys default to 1.0.
         /// </summary>
@@ -44,7 +61,15 @@ namespace KSPArchipelago
         }
 
         public override float GetCraftMassLimit(float level, bool isVAB)
-            => base.GetCraftMassLimit(level, isVAB) * F("GetCraftMassLimit");
+        {
+            // Launch pad (VAB) craft-mass cap is driven by the Progressive
+            // Launch Pad item count, not the facility level. When set, it is an
+            // absolute override of the stock limit. Runway/SPH (isVAB == false)
+            // is unaffected — the progressive cap gates the pad only.
+            if (isVAB && LaunchPadMassCapTonnes >= 0f)
+                return LaunchPadMassCapTonnes;
+            return base.GetCraftMassLimit(level, isVAB) * F("GetCraftMassLimit");
+        }
 
         public override int GetPartCountLimit(float level, bool isVAB)
         {
