@@ -405,8 +405,30 @@ namespace KSPArchipelago
         // Track the last processed index for fast incremental polling.
         private int _lastProcessedIndex = 0;
 
-        // Throttle counter for the periodic contract reconcile (see Update()).
-        private int _reconcileFrame = 0;
+        // Event-driven contract reconcile. Set dirty by the events that can
+        // create owed/healable contracts; Update() runs ReconcileOffers once
+        // per dirty cycle. Replaces the old every-30-frames poll, which ran
+        // ReconcileOffers (a contract-list walk + repeated FindObjectOfType)
+        // ~2x/second for the whole session and caused a periodic main-thread
+        // hitch (stutter while connected, smooth the moment you disconnect).
+        private bool _contractsDirty = false;
+        private ReconcileTrigger _reconcileTrigger = ReconcileTrigger.SceneReady;
+        // Coarse safety net + telemetry in case an event path is missed. 30s is
+        // imperceptible vs the old 0.5s poll; the trigger is logged so a test
+        // cycle shows whether the backstop ever does real work (= a missed event).
+        private float _lastReconcileTime = 0f;
+
+        private enum ReconcileTrigger
+        { SceneReady, ContractsLoaded, GateFallback, ItemsReceived, Connect, Backstop }
+
+        // Request a contract reconcile on the next Update tick where the scene
+        // and ContractSystem are ready. Idempotent within a frame; last trigger
+        // wins for the log line.
+        private void MarkContractsDirty(ReconcileTrigger why)
+        {
+            _contractsDirty = true;
+            _reconcileTrigger = why;
+        }
 
         private void Start()
         {
@@ -451,10 +473,10 @@ namespace KSPArchipelago
         private void OnLevelLoadedGUIReady(GameScenes scene)
         {
             _sceneReady = true;
-            // Don't reconcile yet — wait for onContractsLoaded. If contracts were
-            // already loaded for this scene, reconcile now.
-            if (session != null && _contractsLoaded)
-                Contracts.ApContractManager.ReconcileOffers();
+            // Request a reconcile; Update() runs it once the contract system is
+            // also loaded (it gates on _contractsLoaded there).
+            if (session != null)
+                MarkContractsDirty(ReconcileTrigger.SceneReady);
         }
 
         private void OnContractsLoaded()
@@ -462,8 +484,8 @@ namespace KSPArchipelago
             // KSP has repopulated ContractSystem.Contracts — now it's safe to
             // offer/accept without racing the empty reload window.
             _contractsLoaded = true;
-            if (session != null && _sceneReady)
-                Contracts.ApContractManager.ReconcileOffers();
+            if (session != null)
+                MarkContractsDirty(ReconcileTrigger.ContractsLoaded);
         }
 
         private void Update()
@@ -581,6 +603,9 @@ namespace KSPArchipelago
                 KSPArchipelagoPartsManager.ClearAllExperimentalParts();
                 ResetProgressiveState();
                 ProcessAllItems();
+                // All received items (incl. contract items) are now processed —
+                // offer/heal owed contracts once the scene + ContractSystem are ready.
+                MarkContractsDirty(ReconcileTrigger.Connect);
                 KSPArchipelagoPartsManager.ReconcileApScience(session);
             }
             else if (session != null)
@@ -612,16 +637,30 @@ namespace KSPArchipelago
                 _contractsLoaded = true;
                 Debug.Log("[KSP-AP] contracts gate opened by fallback "
                         + "(onContractsLoaded did not fire this scene)");
+                MarkContractsDirty(ReconcileTrigger.GateFallback);
             }
 
-            // Offer + accept owed contracts once the scene is fully up
-            // (ContractSystem loaded). Throttled — immediacy on scene entry comes
-            // from OnLevelLoadedGUIReady; this is just the periodic catch-up, and
-            // it walks the contract list, so we don't want it every frame.
-            if (session != null && _sceneReady && _contractsLoaded
-                && (++_reconcileFrame % 30) == 0)
+            // Event-driven contract reconcile. Runs ReconcileOffers (a contract-
+            // list walk + FindObjectOfType) only when something actually changed
+            // — scene/contracts ready, a contract item arrived, the gate fell
+            // back, or the coarse backstop below. Replaces the old every-30-
+            // frames poll that hitched the main thread ~2x/second all session.
+            if (session != null && _sceneReady && _contractsLoaded)
             {
-                Contracts.ApContractManager.ReconcileOffers();
+                // Backstop: if no event fired for 30s, reconcile once anyway.
+                // Logged (with trigger) so a test cycle reveals whether it ever
+                // finds work — which would mean we missed an event worth hooking.
+                if (!_contractsDirty
+                    && Time.unscaledTime - _lastReconcileTime > 30f)
+                    MarkContractsDirty(ReconcileTrigger.Backstop);
+
+                if (_contractsDirty)
+                {
+                    _contractsDirty = false;
+                    _lastReconcileTime = Time.unscaledTime;
+                    Debug.Log($"[KSP-AP] ReconcileOffers (trigger={_reconcileTrigger})");
+                    Contracts.ApContractManager.ReconcileOffers();
+                }
             }
 
             missionTracker?.Update();
@@ -749,6 +788,11 @@ namespace KSPArchipelago
                 KSPArchipelagoPartsManager.GiveItem(
                     item.ItemName, item.Player?.Alias, item.LocationName,
                     showToast: !alreadyAwarded);
+
+                // A contract item arrived — request a reconcile so it gets
+                // offered/activated without waiting for a scene change.
+                if (Contracts.ApContractManager.IsContractItem(item.ItemName))
+                    MarkContractsDirty(ReconcileTrigger.ItemsReceived);
 
                 if (!alreadyAwarded)
                 {
