@@ -21,3 +21,6 @@ It is recommended to install these via CKAN to ensure the correct version is use
 
 # Additional Requirements
 Please note that this mod is intended to be completed with the [Making History DLC](https://store.steampowered.com/app/283740/Kerbal_Space_Program_Making_History_Expansion/). You are _VERY_ likely to run into issues beating the APWorld without it.
+
+# Credits
+The in-game flags shipped with this mod are based on the wonderful work of [1Kerbonaut](https://github.com/1Kerbonaut) from the [KSP-Style-Flags](https://github.com/1Kerbonaut/KSP-Style-Flags/tree/v1.0) project (v1.0). Many thanks for making them available!
