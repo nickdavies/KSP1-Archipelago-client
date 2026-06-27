@@ -79,10 +79,19 @@ namespace KSPArchipelago
         // value here is the MAX (inclusive) so `Math.Min(level, max)` clamps.
         public const int MaxLevel = 2;
 
-        // Per-facility AP-granted level. Defaults to 0 (stock career start).
-        // Persistence is delegated to ApScenarioModule (see SetApGrantedLevels
-        // /SnapshotApGrantedLevels).
+        // Per-facility AP-granted level (baseline + progressive increments).
+        // Defaults to 0 (stock career start). Persistence is delegated to
+        // ApScenarioModule (see SetApGrantedLevel / SnapshotBaselineLevels).
         private readonly Dictionary<string, int> _apGrantedLevel
+            = new Dictionary<string, int>();
+
+        // Career-directive (and save-restored) facility baseline — the floor that
+        // AP grants independently of "Progressive <Facility>" items. _apGrantedLevel
+        // = baseline + progressive increments. ResetApGrantedLevels resets to THIS
+        // (not 0) so a connect-time reset can't wipe the directive baseline before
+        // the async OnKSCFacilityUpgraded events arrive (the bug that clamped the
+        // materialiser-cycled Astronaut Complex to 0 via POST-revert with allowed=0).
+        private readonly Dictionary<string, int> _baselineLevel
             = new Dictionary<string, int>();
 
         // True once CareerHackManager has pushed the real per-facility levels
@@ -147,7 +156,7 @@ namespace KSPArchipelago
             Instance = this;
             DontDestroyOnLoad(this);
 
-            foreach (string id in FacilityIds) _apGrantedLevel[id] = 0;
+            foreach (string id in FacilityIds) { _apGrantedLevel[id] = 0; _baselineLevel[id] = 0; }
 
             try { GameEvents.OnKSCFacilityUpgraded.Add(OnFacilityUpgraded); }
             catch (Exception ex)
@@ -370,6 +379,14 @@ namespace KSPArchipelago
             string facilityId = SafeGetId(facility);
             if (string.IsNullOrEmpty(facilityId)) return;
 
+            // Diagnostic: shows why this event reverts/skips. Fires only on
+            // facility upgrades (not per-frame). Expect AC to read allowed=2 now.
+            Debug.Log($"[KSP-AP] OnFacilityUpgraded: id='{facilityId}' newLvl={newLvl} "
+                    + $"baselineApplied={_baselineApplied} "
+                    + $"baseline={(_baselineLevel.TryGetValue(facilityId, out int dbg_b) ? dbg_b : -1)} "
+                    + $"allowed={(_apGrantedLevel.TryGetValue(facilityId, out int dbg_a) ? dbg_a : -1)} "
+                    + $"expected={(_expectedStableLevel.TryGetValue(facilityId, out int dbg_e) ? dbg_e : -1)}");
+
             // Per-facility suppression for the materialiser's force-AC-to-L3
             // trick. Skip POST-revert while we're awaiting the stable level;
             // once we see the expected newLvl, clear the entry and exit
@@ -437,6 +454,9 @@ namespace KSPArchipelago
         {
             if (string.IsNullOrEmpty(facilityId)) return;
             int clamped = Math.Min(Math.Max(level, 0), MaxLevel);
+            // This is an absolute AP-granted level (career directive / save
+            // restore), i.e. the baseline. Progressive items increment above it.
+            _baselineLevel[facilityId] = clamped;
             _apGrantedLevel[facilityId] = clamped;
             ApplyLevelToLiveFacility(facilityId, clamped);
         }
@@ -444,8 +464,12 @@ namespace KSPArchipelago
         public int GetApGrantedLevel(string facilityId)
             => _apGrantedLevel.TryGetValue(facilityId, out int v) ? v : 0;
 
-        public Dictionary<string, int> SnapshotApGrantedLevels()
-            => new Dictionary<string, int>(_apGrantedLevel);
+        // Snapshot the BASELINE for persistence (not _apGrantedLevel, which also
+        // includes progressive-item increments). On load, ProcessAllItems re-walks
+        // the items and re-adds those increments on top of the restored baseline —
+        // persisting the combined value would double-count them.
+        public Dictionary<string, int> SnapshotBaselineLevels()
+            => new Dictionary<string, int>(_baselineLevel);
 
         /// <summary>
         /// Zero out all AP-granted levels in memory. Counterpart to
@@ -461,10 +485,17 @@ namespace KSPArchipelago
         /// items will call ApplyLevelToLiveFacility for each Progressive
         /// item; the upgrade-only guard there (level &lt;= liveLevel)
         /// keeps things idempotent.
+        ///
+        /// Resets to the directive/save BASELINE, not 0: the baseline is the
+        /// AP-granted floor that ProcessAllItems does NOT re-apply (it only
+        /// re-walks Progressive items). Resetting to 0 wiped the baseline at
+        /// connect, leaving POST-revert with allowed=0 — which clamped the
+        /// Astronaut Complex to 0 once the materialiser consumed its guard.
         /// </summary>
         public void ResetApGrantedLevels()
         {
-            foreach (string id in FacilityIds) _apGrantedLevel[id] = 0;
+            foreach (string id in FacilityIds)
+                _apGrantedLevel[id] = _baselineLevel.TryGetValue(id, out int b) ? b : 0;
         }
 
         private void ApplyLevelToLiveFacility(string facilityId, int level)

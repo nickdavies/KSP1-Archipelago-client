@@ -36,7 +36,7 @@ namespace KSPArchipelago
             // compatible (the field is omitted if empty).
             if (CareerUpgradesManager.Instance != null)
             {
-                var snap = CareerUpgradesManager.Instance.SnapshotApGrantedLevels();
+                var snap = CareerUpgradesManager.Instance.SnapshotBaselineLevels();
                 var pairs = new List<string>(snap.Count);
                 foreach (var kv in snap)
                     if (kv.Value > 0)
