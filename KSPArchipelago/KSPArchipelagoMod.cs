@@ -426,6 +426,7 @@ namespace KSPArchipelago
             GameEvents.onGameStateLoad.Add(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
             GameEvents.onGameSceneLoadRequested.Add(OnSceneChange);
             GameEvents.onLevelWasLoadedGUIReady.Add(OnLevelLoadedGUIReady);
+            GameEvents.Contract.onContractsLoaded.Add(OnContractsLoaded);
         }
 
         // The scene is fully up (GUI ready) — ContractSystem has finished
@@ -435,10 +436,29 @@ namespace KSPArchipelago
         // mid-load (that race clobbered force-offered contracts).
         private volatile bool _sceneReady = false;
 
+        // True once KSP has finished (re)loading ContractSystem.Contracts for the
+        // current scene. onLevelWasLoadedGUIReady fires BEFORE that — reconciling
+        // then catches ContractSystem mid-reload with Contracts momentarily EMPTY,
+        // and ReconcileOffers force-creates a duplicate of every owed contract
+        // (re-spawning rescue Kerbals). Gate all reconciling on this instead.
+        private volatile bool _contractsLoaded = false;
+
         private void OnLevelLoadedGUIReady(GameScenes scene)
         {
             _sceneReady = true;
-            if (session != null) Contracts.ApContractManager.ReconcileOffers();
+            // Don't reconcile yet — wait for onContractsLoaded. If contracts were
+            // already loaded for this scene, reconcile now.
+            if (session != null && _contractsLoaded)
+                Contracts.ApContractManager.ReconcileOffers();
+        }
+
+        private void OnContractsLoaded()
+        {
+            // KSP has repopulated ContractSystem.Contracts — now it's safe to
+            // offer/accept without racing the empty reload window.
+            _contractsLoaded = true;
+            if (session != null && _sceneReady)
+                Contracts.ApContractManager.ReconcileOffers();
         }
 
         private void Update()
@@ -578,7 +598,8 @@ namespace KSPArchipelago
             // (ContractSystem loaded). Throttled — immediacy on scene entry comes
             // from OnLevelLoadedGUIReady; this is just the periodic catch-up, and
             // it walks the contract list, so we don't want it every frame.
-            if (session != null && _sceneReady && (++_reconcileFrame % 30) == 0)
+            if (session != null && _sceneReady && _contractsLoaded
+                && (++_reconcileFrame % 30) == 0)
             {
                 Contracts.ApContractManager.ReconcileOffers();
             }
@@ -1021,8 +1042,10 @@ namespace KSPArchipelago
         {
             // A scene load was requested — the current ContractSystem is about
             // to tear down/reload. Stop reconciling until the new scene's GUI
-            // is ready, so we never add a contract into a half-loaded system.
+            // is ready AND contracts have reloaded, so we never add a contract
+            // into a half-loaded system (the empty-reload-window duplicate bug).
             _sceneReady = false;
+            _contractsLoaded = false;
 
             if (scene == GameScenes.MAINMENU && IsConnected)
             {
@@ -1036,6 +1059,7 @@ namespace KSPArchipelago
             GameEvents.onGameStateLoad.Remove(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
             GameEvents.onGameSceneLoadRequested.Remove(OnSceneChange);
             GameEvents.onLevelWasLoadedGUIReady.Remove(OnLevelLoadedGUIReady);
+            GameEvents.Contract.onContractsLoaded.Remove(OnContractsLoaded);
             missionTracker?.Destroy();
         }
     }
