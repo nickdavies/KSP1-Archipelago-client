@@ -71,6 +71,23 @@ namespace KSPArchipelago
         // Flag: scout results arrived on callback thread, need main-thread update.
         private volatile bool pendingScoutUpdate;
 
+        // Researched-node count observed on the previous Update frame. Drives the
+        // "R&D settled" gate: KSP rebuilds the researched node's RDPartList from
+        // tech.partsAssigned, so mutating partsAssigned on the same frame a node
+        // is researched (or while its panel is still live) null-derefs natively
+        // when buying many nodes quickly. We only touch partsAssigned on a frame
+        // where the researched set is unchanged. -1 = not yet sampled.
+        private int _lastResearchedCount = -1;
+
+        // Nodes whose placeholders need clearing, queued from OnNodeChecked.
+        // Cleared on a settled Update frame instead of synchronously inside KSP's
+        // OnTechnologyResearched event (the original crash site).
+        private readonly HashSet<string> _pendingClears = new HashSet<string>();
+
+        // R&D level changed (Progressive R&D received) — re-classify band-locked
+        // nodes. Also a partsAssigned mutation, so it runs on a settled frame.
+        private bool _pendingBandClear;
+
         private void Start()
         {
             mod = FindObjectOfType<KSPArchipelagoMod>();
@@ -100,6 +117,37 @@ namespace KSPArchipelago
 
             if (!rdOpen) return;
 
+            // R&D settled gate: defer ALL partsAssigned mutation to a frame where
+            // no node was researched since the previous frame. During a node-
+            // buying burst the count keeps changing, so we hold off; on the first
+            // quiet frame KSP has finished rebuilding and it's safe to mutate.
+            int researchedNow = CountResearchedNodes();
+            bool settled = researchedNow == _lastResearchedCount;
+            _lastResearchedCount = researchedNow;
+            if (!settled) return;
+
+            // Deferred placeholder clears for researched nodes. Skip the node
+            // currently shown in the panel — its RDPartList is live on that exact
+            // list; re-defer until the player navigates away (or R&D closes).
+            if (_pendingClears.Count > 0)
+            {
+                string inPanelId = RDController.Instance.node_inPanel?.tech?.techID;
+                var cleared = new List<string>();
+                foreach (string id in _pendingClears)
+                {
+                    if (id == inPanelId) continue;
+                    placeholderManager.ClearNode(id);
+                    cleared.Add(id);
+                }
+                foreach (string id in cleared) _pendingClears.Remove(id);
+            }
+
+            if (_pendingBandClear)
+            {
+                _pendingBandClear = false;
+                placeholderManager.ClearBandLockedNodes();
+            }
+
             if (needsRescount && IsTechTreeReady())
             {
                 needsRescount = false;
@@ -119,6 +167,19 @@ namespace KSPArchipelago
             }
         }
 
+        // Count researched nodes — the cheap observable for the settled gate.
+        // Returns -1 when the tree isn't loaded yet (treated as "not settled"
+        // against the -1 baseline, which is fine: IsTechTreeReady gates anyway).
+        private int CountResearchedNodes()
+        {
+            var nodes = RDController.Instance?.nodes;
+            if (nodes == null) return -1;
+            int n = 0;
+            foreach (RDNode node in nodes)
+                if (node != null && node.IsResearched) n++;
+            return n;
+        }
+
         private void OnRDOpen()
         {
             placeholderManager.Initialize();
@@ -127,6 +188,15 @@ namespace KSPArchipelago
 
         private void OnRDClose()
         {
+            // Flush any deferred clears so researched nodes drop their cached
+            // entries (ClearNode removes them from nodeEntries) and don't get
+            // placeholders restored on the next R&D open. Safe here: RDController
+            // is already gone, so ClearNode only touches our own bookkeeping.
+            foreach (string id in _pendingClears)
+                placeholderManager.ClearNode(id);
+            _pendingClears.Clear();
+            _lastResearchedCount = -1;
+
             placeholderManager.ClearAllFromUI();
         }
 
@@ -436,7 +506,8 @@ namespace KSPArchipelago
             if (itemName == "Progressive R&D")
             {
                 // R&D level changed — band-locked nodes may now be purchasable.
-                placeholderManager.ClearBandLockedNodes();
+                // Defer the clear (partsAssigned mutation) to a settled frame.
+                _pendingBandClear = true;
             }
 
             needsRescount = true;
@@ -448,7 +519,11 @@ namespace KSPArchipelago
         /// </summary>
         public void OnNodeChecked(string techId)
         {
-            placeholderManager.ClearNode(techId);
+            // Defer the placeholder clear to a settled Update frame. Clearing
+            // tech.partsAssigned synchronously here — inside KSP's
+            // OnTechnologyResearched event, while KSP rebuilds the node's
+            // RDPartList — is the native crash seen when buying nodes fast.
+            _pendingClears.Add(techId);
 
             var current = scoutedByNode;
             if (current.ContainsKey(techId))
@@ -471,6 +546,9 @@ namespace KSPArchipelago
             scoutedByNode = new Dictionary<string, List<ScoutedSlot>>();
             scoutedNodeIds.Clear();
             pendingScoutUpdate = false;
+            _pendingClears.Clear();
+            _pendingBandClear = false;
+            _lastResearchedCount = -1;
         }
     }
 }
