@@ -8,13 +8,16 @@ namespace KSPArchipelago.Contracts.Primitives
 {
     /// <summary>
     /// <c>{ "kind":"specific_orbit", "body":"Mun", "orbit_type":"EQUATORIAL",
-    ///      "inclination":0, "eccentricity":0, "sma":214000, "deviation":10 }</c>
+    ///      "inclination":0, "eccentricity":0, "sma":214000, "deviation":10,
+    ///      "lan":120, "arg_pe":45 }</c>
     ///
     /// Maps to stock <see cref="SpecificOrbitParameter"/> — the param the satellite
     /// contracts use. It renders the blue target orbit and completes when the
-    /// active vessel matches within <c>deviation</c>. <c>lan</c>/<c>argPe</c>/
-    /// <c>MNA</c>/<c>epoch</c> are 0 for the circular orbits the generator emits and
-    /// are not sent over the wire.
+    /// active vessel matches within <c>deviation</c>. <c>lan</c> (longitude of
+    /// ascending node) and <c>arg_pe</c> (argument of periapsis) orient the orbit;
+    /// both are optional and default to 0 when absent, so this stays compatible
+    /// with servers that don't send them (no contract-schema bump). <c>MNA</c>/
+    /// <c>epoch</c> stay 0 — phase along the orbit doesn't affect matching.
     /// </summary>
     public sealed class SpecificOrbitPrimitive : ContractPrimitiveBase<SpecificOrbitPrimitive.Spec>
     {
@@ -24,7 +27,7 @@ namespace KSPArchipelago.Contracts.Primitives
         {
             public string BodyName;
             public OrbitType OrbitType;
-            public double Inclination, Eccentricity, Sma, Deviation;
+            public double Inclination, Eccentricity, Sma, Deviation, Lan, ArgPe;
         }
 
         protected override Spec Parse(JObject spec)
@@ -43,6 +46,8 @@ namespace KSPArchipelago.Contracts.Primitives
                 Eccentricity = spec.Value<double>("eccentricity"),
                 Sma = sma.Value,
                 Deviation = spec.Value<double?>("deviation") ?? 10.0,
+                Lan = spec.Value<double?>("lan") ?? 0.0,
+                ArgPe = spec.Value<double?>("arg_pe") ?? 0.0,
             };
         }
 
@@ -56,7 +61,7 @@ namespace KSPArchipelago.Contracts.Primitives
             //        argumentOfPeriapsis, meanAnomalyAtEpoch, epoch, body, deviationWindow)
             return new SpecificOrbitParameter(
                 p.OrbitType, p.Inclination, p.Eccentricity, p.Sma,
-                0.0, 0.0, 0.0, 0.0, body, p.Deviation);
+                p.Lan, p.ArgPe, 0.0, 0.0, body, p.Deviation);
         }
 
         private static OrbitType ParseOrbitType(string s)
