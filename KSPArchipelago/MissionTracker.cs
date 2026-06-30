@@ -838,9 +838,17 @@ namespace KSPArchipelago
         {
             if (vessel == null) return;
 
-            // Award Sample Return for every body whose surface sample is on board.
+            // Award Return + Sample Return for every body whose surface sample is on
+            // board. A surface sample at recovery is strictly stronger evidence than the
+            // stock onReturnFromSurface/onReturnFromOrbit flight-log signal, which misses
+            // the EVA-bailout case: a kerbal carries the sample down under personal chute
+            // from Kerbin orbit on a "vessel" whose flight log never recorded the body.
+            // Both locations are idempotent, so re-firing in the common path is a no-op.
             foreach (string body in CollectSurfaceSampleBodies(vessel))
+            {
+                ReportBodyEvent(body, "Return");
                 ReportBodyEvent(body, "Sample Return");
+            }
 
             foreach (ProtoPartSnapshot part in vessel.protoPartSnapshots)
             {
