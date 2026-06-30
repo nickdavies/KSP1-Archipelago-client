@@ -883,6 +883,48 @@ namespace KSPArchipelago
                     missing.Add("ksc_site");
                 }
 
+                // Part packs: warn (never reject) if the seed's optional packs
+                // don't match the installed expansions. Stock is always present;
+                // the client needs no part-level detail (contracts arrive fully
+                // resolved) — this is purely a heads-up about a DLC mismatch.
+                if (sd.TryGetValue("enabled_part_packs", out object eppObj)
+                    && eppObj is JArray eppArr)
+                {
+                    // pack id -> KSP expansion name (Stock = base game, omitted).
+                    var expansionFor = new Dictionary<string, string>
+                    {
+                        { "MakingHistory", "MakingHistory" },
+                        { "BreakingGround", "Serenity" },
+                    };
+                    var enabledPacks = new HashSet<string>();
+                    foreach (var tok in eppArr) enabledPacks.Add((string)tok);
+                    foreach (string pack in enabledPacks)
+                    {
+                        if (pack == "Stock") continue;
+                        if (!expansionFor.TryGetValue(pack, out string expName))
+                        {
+                            Debug.LogWarning($"[KSP-AP] Seed enables unknown part "
+                                + $"pack '{pack}'.");
+                        }
+                        else if (!Expansions.ExpansionsLoader.IsExpansionInstalled(expName))
+                        {
+                            Debug.LogWarning($"[KSP-AP] Seed enables part pack "
+                                + $"'{pack}' but the '{expName}' expansion isn't "
+                                + $"installed — its parts will never unlock.");
+                        }
+                    }
+                    foreach (var kv in expansionFor)
+                    {
+                        if (!enabledPacks.Contains(kv.Key)
+                            && Expansions.ExpansionsLoader.IsExpansionInstalled(kv.Value))
+                        {
+                            Debug.Log($"[KSP-AP] Expansion '{kv.Value}' is installed "
+                                + $"but pack '{kv.Key}' is disabled in this seed — "
+                                + $"its parts stay locked.");
+                        }
+                    }
+                }
+
                 // Hard-fail when the seed wants an alien starting body
                 // but KK isn't installed.  Bridge.Current is null only
                 // when StartingBodyHandler.Awake's KK probe found KK
