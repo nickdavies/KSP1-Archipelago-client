@@ -58,22 +58,34 @@ namespace KSPArchipelago
             "SpaceCenter/Administration",
         };
 
-        // Maps Progressive item names to facility ids. AP items shipping in
-        // the Career mode plan look like "Progressive VAB", "Progressive
-        // Launch Pad", etc.
-        public static readonly Dictionary<string, string> ItemNameToFacilityId
-            = new Dictionary<string, string>
+        // Server-provided item→facility map (from slot_data
+        // career.facility_item_map), pushed by CareerHackManager at connect.
+        // Replaces the old hardcoded name map (whose keys had drifted from the
+        // generator item names, e.g. "Progressive RnD" vs "Progressive R&D") — the
+        // client now actuates whatever facilities the generator sends, so adding a
+        // building is a server-only change. Each item's facility level is derived
+        // from the count of that item received via its thresholds.
+        private Dictionary<string, FacilityItemSpec> _facilityItemMap
+            = new Dictionary<string, FacilityItemSpec>(StringComparer.Ordinal);
+
+        public Dictionary<string, FacilityItemSpec> FacilityItemMap => _facilityItemMap;
+
+        public void SetFacilityItemMap(Dictionary<string, FacilityItemSpec> map)
         {
-            { "Progressive VAB",                "SpaceCenter/VehicleAssemblyBuilding" },
-            { "Progressive SPH",                "SpaceCenter/SpaceplaneHangar" },
-            { "Progressive LaunchPad",          "SpaceCenter/LaunchPad" },
-            { "Progressive Runway",             "SpaceCenter/Runway" },
-            { "Progressive TrackingStation",    "SpaceCenter/TrackingStation" },
-            { "Progressive MissionControl",     "SpaceCenter/MissionControl" },
-            { "Progressive AstronautComplex",   "SpaceCenter/AstronautComplex" },
-            { "Progressive RnD",                "SpaceCenter/ResearchAndDevelopment" },
-            { "Progressive Administration",     "SpaceCenter/Administration" },
-        };
+            _facilityItemMap = map
+                ?? new Dictionary<string, FacilityItemSpec>(StringComparer.Ordinal);
+        }
+
+        // Facility level for a received-item count: the number of thresholds the
+        // count has reached. thresholds [1,2] → increment; [2,5] → the R&D
+        // facility's non-linear (samples/top) schedule.
+        public static int LevelForCount(List<int> thresholds, int count)
+        {
+            if (thresholds == null) return 0;
+            int level = 0;
+            foreach (int t in thresholds) if (count >= t) level++;
+            return level;
+        }
 
         // Maximum AP-granted level per facility. Stock has 3 levels (0/1/2);
         // value here is the MAX (inclusive) so `Math.Min(level, max)` clamps.
@@ -405,6 +417,25 @@ namespace KSPArchipelago
             _apGrantedLevel[facilityId] = next;
             ApplyLevelToLiveFacility(facilityId, next);
             return next;
+        }
+
+        /// <summary>
+        /// Raise the AP-granted level for a facility to a level computed from a
+        /// received-item count (see <see cref="LevelForCount"/>), floored at the
+        /// directive baseline and clamped to MaxLevel, then applied to the live
+        /// instance (upgrade-only). Unlike <see cref="IncrementApGrantedLevel"/>
+        /// this is absolute-from-count, so re-walking items on rebuild is
+        /// idempotent, and a latent (ungated, baseline == MaxLevel) facility such
+        /// as R&amp;D stays maxed and is never lowered.
+        /// </summary>
+        public int RaiseApGrantedLevelTo(string facilityId, int level)
+        {
+            if (string.IsNullOrEmpty(facilityId)) return 0;
+            int baseline = _baselineLevel.TryGetValue(facilityId, out int b) ? b : 0;
+            int target = Math.Min(Math.Max(level, baseline), MaxLevel);
+            _apGrantedLevel[facilityId] = target;
+            ApplyLevelToLiveFacility(facilityId, target);
+            return target;
         }
 
         /// <summary>

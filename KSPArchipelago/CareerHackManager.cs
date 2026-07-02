@@ -11,11 +11,36 @@ namespace KSPArchipelago
     /// Each flag is honoured independently (piecemeal lowering is a future
     /// generator concern — the client just actuates whatever it's told).
     /// </summary>
+    /// <summary>
+    /// One entry of the server's <c>facility_item_map</c>: the facilities a
+    /// "Progressive &lt;X&gt;" item drives, and the item-count thresholds at which
+    /// the facility level steps up. Facility level = number of thresholds that are
+    /// &lt;= the count of that item received (then floored at the directive baseline
+    /// and clamped to MaxLevel by <see cref="CareerUpgradesManager"/>). Increment
+    /// buildings use [1, 2]; the R&amp;D facility rides a non-linear schedule ([2, 5]).
+    /// </summary>
+    public sealed class FacilityItemSpec
+    {
+        public readonly List<string> Facilities;
+        public readonly List<int> Thresholds;
+        public FacilityItemSpec(List<string> facilities, List<int> thresholds)
+        {
+            Facilities = facilities ?? new List<string>();
+            Thresholds = thresholds ?? new List<int>();
+        }
+    }
+
     public sealed class CareerDirectives
     {
         // facility id (e.g. "SpaceCenter/LaunchPad") → directive level (0..2).
         public readonly Dictionary<string, int> BuildingLevels
             = new Dictionary<string, int>(StringComparer.Ordinal);
+        // Progressive item name → the facilities it drives + count thresholds.
+        // Replaces the old hardcoded client item-name→facility map: the client
+        // actuates whatever the generator sends, so adding a building is a
+        // server-only change.
+        public readonly Dictionary<string, FacilityItemSpec> FacilityItemMap
+            = new Dictionary<string, FacilityItemSpec>(StringComparer.Ordinal);
         public bool InfiniteFunds;
         public bool InfiniteReputation;
         public bool UnlimitedContracts;
@@ -27,6 +52,18 @@ namespace KSPArchipelago
             if (obj["building_levels"] is JObject levels)
                 foreach (var kv in levels)
                     d.BuildingLevels[kv.Key] = (int)kv.Value;
+            if (obj["facility_item_map"] is JObject fmap)
+                foreach (var kv in fmap)
+                {
+                    if (!(kv.Value is JObject spec)) continue;
+                    var facilities = new List<string>();
+                    if (spec["facilities"] is JArray fa)
+                        foreach (var f in fa) facilities.Add((string)f);
+                    var thresholds = new List<int>();
+                    if (spec["thresholds"] is JArray ta)
+                        foreach (var t in ta) thresholds.Add((int)t);
+                    d.FacilityItemMap[kv.Key] = new FacilityItemSpec(facilities, thresholds);
+                }
             d.InfiniteFunds      = (bool?)obj["infinite_funds"] ?? false;
             d.InfiniteReputation = (bool?)obj["infinite_reputation"] ?? false;
             d.UnlimitedContracts = (bool?)obj["unlimited_contracts"] ?? false;
@@ -117,6 +154,10 @@ namespace KSPArchipelago
         {
             var upgrades = CareerUpgradesManager.Instance;
             if (upgrades == null || _directives == null) return;
+            // Push the item→facility map first so the item-receive path (which
+            // may run in the same Update tick) can actuate against the baselines
+            // we set next.
+            upgrades.SetFacilityItemMap(_directives.FacilityItemMap);
             foreach (var kv in _directives.BuildingLevels)
                 upgrades.SetApGrantedLevel(kv.Key, kv.Value);
             // The AP-granted cap is now authoritative — let the POST-revert

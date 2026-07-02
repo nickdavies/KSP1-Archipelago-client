@@ -106,41 +106,44 @@ namespace KSPArchipelago
                 return;
             }
 
-            // Progressive R&D: upgrade the tech tree band limit AND the
-            // real R&D facility level (which affects science transmission
-            // rate, lab caps, etc. via GameVariables).
-            if (itemName == "Progressive R&D")
+            // Progressive R&D unlocks the artificial tech-tree band (RDLevel),
+            // which is independent of the R&D *facility* level. The facility level
+            // is driven by the facility_item_map below (latent this release — it
+            // ships maxed, so surface samples are logic-gated only until a spike
+            // confirms gating it doesn't disturb KSP tech research).
+            bool isRD = itemName == "Progressive R&D";
+            if (isRD && mod != null)
             {
-                if (mod != null) mod.IncrementRDLevel();
+                mod.IncrementRDLevel();
                 if (showToast)
                 {
-                    toastText = $"AP: R&D Facility Upgraded to Level {mod?.RDLevel ?? 0}!";
+                    toastText = $"AP: Research & Development Level {mod.RDLevel}";
                     ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
                     PostToMessageSystem(senderName, locationName, toastText);
                 }
-                CareerUpgradesManager.Instance
-                    ?.IncrementApGrantedLevel("SpaceCenter/ResearchAndDevelopment");
-                return;
             }
 
-            // Career-mode facility progressives (Career mode migration —
-            // notes/career_spike.md, plans/career_mode_migration.md §2.3).
-            // Distinct from the legacy "Progressive Launch Pad" (with space)
-            // and "Progressive R&D" handlers above, which drive the artificial
-            // tier system being removed in task #13.
-            if (CareerUpgradesManager.ItemNameToFacilityId.TryGetValue(
-                    itemName, out string facilityId))
+            // Facility progressives: drive facility levels generically from the
+            // server-provided slot_data map (item → facilities + count thresholds),
+            // so the client hardcodes no item names and future buildings are a
+            // server-only change.
+            var facMap = CareerUpgradesManager.Instance?.FacilityItemMap;
+            if (facMap != null && facMap.TryGetValue(itemName, out FacilityItemSpec facSpec))
             {
-                int newLevel = CareerUpgradesManager.Instance
-                    ?.IncrementApGrantedLevel(facilityId) ?? 0;
-                if (showToast)
+                int count = mod?.IncrementProgressiveCount(itemName) ?? 0;
+                int level = CareerUpgradesManager.LevelForCount(facSpec.Thresholds, count);
+                int applied = 0;
+                foreach (string fid in facSpec.Facilities)
+                    applied = CareerUpgradesManager.Instance?.RaiseApGrantedLevelTo(fid, level) ?? 0;
+                if (showToast && !isRD)   // R&D already toasted its band above
                 {
-                    toastText = $"AP: {itemName} -> Lv{newLevel + 1}";
+                    toastText = $"AP: {itemName} -> Lv{applied + 1}";
                     ScreenMessages.PostScreenMessage(toastText, 4f, ScreenMessageStyle.UPPER_CENTER);
                     PostToMessageSystem(senderName, locationName, toastText);
                 }
                 return;
             }
+            if (isRD) return;   // R&D handled (band bumped); not a part
 
             // Individual part items: unlock the part as experimental.
             AvailablePart part = PartLoader.getPartInfoByName(itemName);
