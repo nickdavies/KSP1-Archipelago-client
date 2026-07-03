@@ -71,6 +71,16 @@ namespace KSPArchipelago
         // Flag: scout results arrived on callback thread, need main-thread update.
         private volatile bool pendingScoutUpdate;
 
+        // Nodes whose scout FAILED. Node IDs are marked in scoutedNodeIds *before*
+        // the scout call (to dedupe in-flight requests), so a failure — the AP
+        // client's ScoutLocationsAsync can throw a transient NullReferenceException,
+        // sync or on the task — must un-mark them or they stay stuck on the raw
+        // "AP Item" placeholder forever. The async callback runs on a pool thread;
+        // it queues here under the lock and the main-thread Update drains it, since
+        // scoutedNodeIds is only ever touched on the main thread.
+        private readonly object _scoutRetryLock = new object();
+        private readonly List<string> _scoutRetryIds = new List<string>();
+
         // Researched-node count observed on the previous Update frame. Drives the
         // "R&D settled" gate: KSP rebuilds the researched node's RDPartList from
         // tech.partsAssigned, so mutating partsAssigned on the same frame a node
@@ -146,6 +156,24 @@ namespace KSPArchipelago
             {
                 _pendingBandClear = false;
                 placeholderManager.ClearBandLockedNodes();
+            }
+
+            // Un-mark scout-failed nodes (queued from the callback thread) so they
+            // rescout instead of staying stuck on the "AP Item" placeholder.
+            List<string> retryIds = null;
+            lock (_scoutRetryLock)
+            {
+                if (_scoutRetryIds.Count > 0)
+                {
+                    retryIds = new List<string>(_scoutRetryIds);
+                    _scoutRetryIds.Clear();
+                }
+            }
+            if (retryIds != null)
+            {
+                foreach (string id in retryIds)
+                    scoutedNodeIds.Remove(id);
+                needsRescount = true;
             }
 
             if (needsRescount && IsTechTreeReady())
@@ -259,12 +287,13 @@ namespace KSPArchipelago
             ArchipelagoSession session = mod.Session;
             if (session == null) return;
 
+            List<string> newNodeIds = null;
             try
             {
                 List<string> purchasableIds = FindPurchasableNodeIds();
 
                 // Filter to nodes we haven't scouted yet.
-                var newNodeIds = new List<string>();
+                newNodeIds = new List<string>();
                 foreach (string id in purchasableIds)
                 {
                     if (!scoutedNodeIds.Contains(id))
@@ -314,6 +343,13 @@ namespace KSPArchipelago
             catch (Exception ex)
             {
                 Debug.LogWarning($"[KSP-AP] ScoutNewPurchasableNodes failed: {ex}");
+                // Un-mark so a later PopulateAndScout retries. ScoutLocationsAsync
+                // can throw a transient NRE synchronously; without this the nodes
+                // stay stuck on the raw "AP Item" placeholder. Main thread here, so
+                // touching scoutedNodeIds directly is safe.
+                if (newNodeIds != null)
+                    foreach (string id in newNodeIds)
+                        scoutedNodeIds.Remove(id);
             }
         }
 
@@ -325,6 +361,7 @@ namespace KSPArchipelago
                 if (task.IsFaulted)
                 {
                     Debug.LogWarning($"[KSP-AP] Scout task failed: {task.Exception}");
+                    QueueScoutRetry(scoutedIds);
                     return;
                 }
 
@@ -372,7 +409,17 @@ namespace KSPArchipelago
             catch (Exception ex)
             {
                 Debug.LogWarning($"[KSP-AP] Scout callback error: {ex}");
+                QueueScoutRetry(scoutedIds);
             }
+        }
+
+        // Queue scout-failed node IDs for the main thread to un-mark. Called on the
+        // async callback (pool) thread, so it only touches the lock-guarded list.
+        private void QueueScoutRetry(List<string> ids)
+        {
+            if (ids == null) return;
+            lock (_scoutRetryLock)
+                _scoutRetryIds.AddRange(ids);
         }
 
         private List<string> FindPurchasableNodeIds()
