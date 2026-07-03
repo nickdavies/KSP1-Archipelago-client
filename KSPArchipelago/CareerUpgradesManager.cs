@@ -77,8 +77,8 @@ namespace KSPArchipelago
         }
 
         // Facility level for a received-item count: the number of thresholds the
-        // count has reached. thresholds [1,2] → increment; [2,5] → the R&D
-        // facility's non-linear (samples/top) schedule.
+        // count has reached. thresholds [1,2] → increment; [2,4] → the R&D
+        // facility's non-linear (samples at 2, top at 4) schedule.
         public static int LevelForCount(List<int> thresholds, int count)
         {
             if (thresholds == null) return 0;
@@ -311,17 +311,30 @@ namespace KSPArchipelago
             var tracker = mod?.Tracker;
             tracker?.ReportLocation(apCheckName);
 
-            // Branch the toast on whether AP actually recognises this
-            // location name. "Unknown" means the seed wasn't generated with
-            // this upgrade as a check yet (generation side incomplete);
-            // "known" means the click registered and the player should
-            // wait for a matching Progressive item.
+            // The Progressive item that unlocks this facility — reverse-lookup of
+            // the server's facility_item_map. Null for an ungated facility.
+            string progressiveItem = null;
+            foreach (var kv in _facilityItemMap)
+            {
+                if (kv.Value?.Facilities != null && kv.Value.Facilities.Contains(facilityId))
+                {
+                    progressiveItem = kv.Key;
+                    break;
+                }
+            }
+
+            // Facility upgrades are gated by the multiworld: the building rises when
+            // the matching Progressive item arrives, not from clicking — so point the
+            // player at that item. (The knownOnServer branch stays for any seed that
+            // models the upgrade as an explicit "Try Upgrade" check.)
             bool knownOnServer = tracker != null && tracker.IsLocationKnown(apCheckName);
+            string restricted = progressiveItem != null
+                ? $"<color=yellow>Building upgrades are restricted — look for the item \"{progressiveItem}\".</color>"
+                : "<color=yellow>Building upgrades are restricted by the multiworld.</color>";
             string toast = knownOnServer
                 ? $"<color=#7FFF7F>[AP] Upgrade check logged:</color> {apCheckName}\n"
                   + "<color=#A0E0FF>Building stays locked until the matching Progressive item arrives from the multiworld.</color>"
-                : $"<color=orange>[AP] {apCheckName}</color>\n"
-                  + "<color=yellow>This seed doesn't include this upgrade as a check yet. Click recorded locally; upgrade still locked.</color>";
+                : $"<color=orange>[AP] {facilityShortName} upgrade</color>\n" + restricted;
             ScreenMessages.PostScreenMessage(toast, 5f, ScreenMessageStyle.UPPER_CENTER);
         }
 
