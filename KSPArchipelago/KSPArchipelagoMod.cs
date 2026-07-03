@@ -489,7 +489,20 @@ namespace KSPArchipelago
             // Request a reconcile; Update() runs it once the contract system is
             // also loaded (it gates on _contractsLoaded there).
             if (session != null)
+            {
                 MarkContractsDirty(ReconcileTrigger.SceneReady);
+                // CareerHackManager.OnLevelLoaded fires on this SAME event and
+                // re-asserts building BASELINES via SetApGrantedLevel, which
+                // overwrites the effective level and drops any "Progressive
+                // <Facility>" increment already applied — a Tracking Station
+                // silently falling back to no patched conics is the visible
+                // symptom. Flag a reset so the next Update() re-walks items and
+                // re-adds those increments on top of the freshly-set baselines:
+                // the SAME ordered rebuild (ResetProgressiveState + ProcessAllItems)
+                // that the connect / VAB-entry paths already rely on, which is why
+                // a reconnect / re-award fixes the stuck facility today.
+                _needsReset = true;
+            }
         }
 
         private void OnContractsLoaded()
