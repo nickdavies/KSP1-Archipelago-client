@@ -108,9 +108,9 @@ namespace KSPArchipelago
 
             // Progressive R&D unlocks the artificial tech-tree band (RDLevel),
             // which is independent of the R&D *facility* level. The facility level
-            // is driven by the facility_item_map below (latent this release — it
-            // ships maxed, so surface samples are logic-gated only until a spike
-            // confirms gating it doesn't disturb KSP tech research).
+            // is driven by the facility_item_map below — the R&D building is now
+            // gated (starts un-upgraded; 2nd copy → mid level, 4th → max), so its
+            // science-cost cap and surface-sample gate ride the Progressive R&D count.
             bool isRD = itemName == "Progressive R&D";
             if (isRD && mod != null)
             {
@@ -883,10 +883,13 @@ namespace KSPArchipelago
                     missing.Add("ksc_site");
                 }
 
-                // Part packs: warn (never reject) if the seed's optional packs
-                // don't match the installed expansions. Stock is always present;
-                // the client needs no part-level detail (contracts arrive fully
-                // resolved) — this is purely a heads-up about a DLC mismatch.
+                // Part packs: HARD-fail if the seed enables an optional pack that
+                // isn't available here (its backing content — a KSP expansion today,
+                // mods later — isn't installed). Those parts are in the item pool
+                // but can never build, so letting the connect through silently
+                // bricks the run — reject it (reusing the _slotDataError path, like
+                // the KK check below) so the player sees why. Stock is always
+                // present; owned-but-disabled is harmless and only logged.
                 if (sd.TryGetValue("enabled_part_packs", out object eppObj)
                     && eppObj is JArray eppArr)
                 {
@@ -898,6 +901,7 @@ namespace KSPArchipelago
                     };
                     var enabledPacks = new HashSet<string>();
                     foreach (var tok in eppArr) enabledPacks.Add((string)tok);
+                    var missingPacks = new List<string>();
                     foreach (string pack in enabledPacks)
                     {
                         if (pack == "Stock") continue;
@@ -908,10 +912,20 @@ namespace KSPArchipelago
                         }
                         else if (!Expansions.ExpansionsLoader.IsExpansionInstalled(expName))
                         {
-                            Debug.LogWarning($"[KSP-AP] Seed enables part pack "
-                                + $"'{pack}' but the '{expName}' expansion isn't "
-                                + $"installed — its parts will never unlock.");
+                            missingPacks.Add(pack == expName ? pack : $"{pack} ({expName})");
                         }
+                    }
+                    if (missingPacks.Count > 0)
+                    {
+                        _slotDataError = "This seed enables part pack(s) you don't "
+                            + "have installed: " + string.Join(", ", missingPacks.ToArray())
+                            + ". Install what each one needs (expansion or mod), or "
+                            + "regenerate the seed with them removed from the Enabled "
+                            + "Part Packs option. Building with these parts would "
+                            + "silently break your run.";
+                        session = null;
+                        ConnectedSlot = null;
+                        return;
                     }
                     foreach (var kv in expansionFor)
                     {
