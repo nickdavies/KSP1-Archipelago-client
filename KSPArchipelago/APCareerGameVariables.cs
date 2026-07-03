@@ -62,11 +62,12 @@ namespace KSPArchipelago
 
         public override float GetCraftMassLimit(float level, bool isVAB)
         {
-            // Launch pad (VAB) craft-mass cap is driven by the Progressive
-            // Launch Pad item count, not the facility level. When set, it is an
-            // absolute override of the stock limit. Runway/SPH (isVAB == false)
-            // is unaffected — the progressive cap gates the pad only.
-            if (isVAB && LaunchPadMassCapTonnes >= 0f)
+            // Launch-mass cap is driven by the Progressive Launch Pad item count,
+            // not the facility level. When set, it is an absolute override of the
+            // stock limit that applies to BOTH launch sites: a craft built in the
+            // SPH and launched from the runway (isVAB == false) must not bypass the
+            // pad cap, so the override is not gated on isVAB.
+            if (LaunchPadMassCapTonnes >= 0f)
                 return LaunchPadMassCapTonnes;
             return base.GetCraftMassLimit(level, isVAB) * F("GetCraftMassLimit");
         }
