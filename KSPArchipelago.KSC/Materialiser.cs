@@ -956,6 +956,19 @@ namespace KSPArchipelago.KSC
             {
                 HighLogic.CurrentGame.defaultVABLaunchSite = bodyName + " LaunchPad";
                 HighLogic.CurrentGame.defaultSPHLaunchSite = bodyName + " Runway";
+
+                // Also point KK's own per-save defaults at the alien sites
+                // so any KK GetDefaultSite() reset (e.g. facility-mismatch
+                // rejection on editor entry) lands on the alien site, not
+                // stock Kerbin. Kerbin branch left alone: stock names are
+                // KK's initial values, and a Kerbin player's own picker
+                // choice should survive.
+                var kk = KerbalKonstructs.KerbalKonstructs.instance;
+                if (kk != null)
+                {
+                    kk.defaultVABlaunchsite = bodyName + " LaunchPad";
+                    kk.defaultSPHlaunchsite = bodyName + " Runway";
+                }
             }
         }
 

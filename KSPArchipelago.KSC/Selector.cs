@@ -7,10 +7,11 @@
 //     (matches AP_KSC_Probe's wait — Squad scene's decoration meshes
 //     and renderer bounds aren't stable immediately at scene init).
 //   EditorLaunchGate — fires on each editor entry, re-applies the
-//     stock-launchpad hide and sets the alien LaunchPad as the
-//     default launch site (LaunchSiteManager.setLaunchSite NREs in
-//     the SpaceCenter scene because it writes to EditorLogic.fetch,
-//     so we defer it to here where EditorLogic exists).
+//     stock-launchpad hide and pins the facility-matched alien site
+//     (LaunchPad in the VAB, Runway in the SPH) as the launch site
+//     (LaunchSiteManager.setLaunchSite NREs in the SpaceCenter scene
+//     because it writes to EditorLogic.fetch, so we defer it to here
+//     where EditorLogic exists).
 
 using System.Collections;
 using KerbalKonstructs.Core;
@@ -76,13 +77,27 @@ namespace KSPArchipelago.KSC
             // or KK reopened a Making History site.
             Materialiser.HideKerbinLaunchSites();
 
-            // Default the launch button to the alien LaunchPad.  Must run
+            // Default the launch button to the alien site matching this
+            // editor — Runway for the SPH, LaunchPad for the VAB.  Must run
             // in the editor scene — LaunchSiteManager.setLaunchSite writes
             // EditorLogic.fetch.launchSiteName which is null in SpaceCenter.
-            KKLaunchSite pad = LaunchSiteManager.GetLaunchSiteByName($"{Materialiser.CurrentBody} LaunchPad");
-            if (pad != null)
+            //
+            // The facility match is load-bearing: KK's own editor-entry
+            // handler validates the current site with CheckLaunchSiteIsValid
+            // (SPH editor + VAB-type site = invalid) and resets a mismatch to
+            // KK's default — stock Kerbin Runway — which is how an SPH
+            // direct-Launch used to escape to Kerbin.
+            string suffix = EditorDriver.editorFacility == EditorFacility.SPH ? "Runway" : "LaunchPad";
+            string siteName = $"{Materialiser.CurrentBody} {suffix}";
+            KKLaunchSite site = LaunchSiteManager.GetLaunchSiteByName(siteName);
+            if (site != null)
             {
-                LaunchSiteManager.setLaunchSite(pad);
+                LaunchSiteManager.setLaunchSite(site);
+            }
+            else
+            {
+                Debug.LogError($"[KSPArchipelago.KSC] '{siteName}' is not registered — "
+                             + "the Launch button will fall back to a stock Kerbin site.");
             }
         }
     }
