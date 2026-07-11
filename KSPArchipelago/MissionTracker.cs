@@ -932,17 +932,24 @@ namespace KSPArchipelago
         private void OnLand(Vessel vessel, CelestialBody body)
         {
             if (!IsMissionVessel(vessel)) return;
+            HandleTouchdown(vessel, body);
+        }
+
+        // Shared by OnLand and the SPLASHED branch of OnSituationChange —
+        // onLand does not fire for SPLASHED, and ocean touchdowns count as
+        // landings in the generator's model.
+        private void HandleTouchdown(Vessel vessel, CelestialBody body)
+        {
             if (body.name == KSPArchipelagoMod.StartingBody)
             {
-                // Home-body Return requires the vessel to have achieved
-                // home orbit first. Sub-orbital hops don't qualify.
-                if (_vesselsOrbitedHome.Contains(vessel.persistentId))
-                {
-                    ReportBodyEvent(body.name, "Return");
-                    foreach (string sampleBody in CollectSurfaceSampleBodies(vessel))
-                        ReportBodyEvent(sampleBody, "Sample Return");
-                }
-                return;
+                // Home-body Landing/Return require the vessel to have achieved
+                // home orbit first — matches the generator's home LAND/RETURN
+                // profile (ascent + deorbit). Sub-orbital hops don't qualify.
+                if (!_vesselsOrbitedHome.Contains(vessel.persistentId))
+                    return;
+                ReportBodyEvent(body.name, "Return");
+                foreach (string sampleBody in CollectSurfaceSampleBodies(vessel))
+                    ReportBodyEvent(sampleBody, "Sample Return");
             }
             ReportBodyEvent(body.name, "Landing");
             if (vessel.GetCrewCount() > 0)
@@ -963,7 +970,10 @@ namespace KSPArchipelago
             // or Laythe all check the same "Splashdown" location.
             if (data.to == Vessel.Situations.SPLASHED
                 && mainBody != null && mainBody.ocean)
+            {
                 ReportLocation("Splashdown", grantScience: true);
+                HandleTouchdown(v, mainBody);
+            }
 
             // First Launch: any transition to FLYING or SUB_ORBITAL on the home body.
             // Don't check data.from — KSP can insert PRELAUNCH→LANDED→FLYING
