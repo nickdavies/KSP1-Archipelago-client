@@ -1,5 +1,3 @@
-using System.Collections;
-using System.Collections.Generic;
 using KSP.UI.Screens;
 using UnityEngine;
 
@@ -77,41 +75,19 @@ namespace KSPArchipelago
             float mass = vessel.GetTotalMass();
             if (mass <= cap + LaunchPadGate.GraceTonnes) return;
 
-            ScreenMessages.PostScreenMessage(
-                $"<color=red>STRUCTURAL FAILURE:</color> vessel {mass:F2} t exceeds " +
-                $"launch pad rating {cap:F0} t.\n" +
-                "<color=yellow>Damn it Jeb, I told you it was too heavy for the pad!</color>",
-                8f, ScreenMessageStyle.UPPER_CENTER);
-
-            if (MessageSystem.Instance != null)
-            {
-                var msg = new MessageSystem.Message(
-                    "Pad Structural Failure",
-                    $"Damn it Jeb, I told you it was too heavy for the pad!\n\n" +
+            VesselDestruction.Destroy(
+                this, vessel,
+                screenMessage:
+                    $"<color=red>STRUCTURAL FAILURE:</color> vessel {mass:F2} t exceeds " +
+                    $"launch pad rating {cap:F0} t.\n" +
+                    "<color=yellow>Damn it Jeb, I told you it was too heavy for the pad!</color>",
+                messageTitle: "Pad Structural Failure",
+                messageBody:
+                    "Damn it Jeb, I told you it was too heavy for the pad!\n\n" +
                     $"Vessel mass: {mass:F2} t\n" +
                     $"Pad rating: {cap:F0} t\n\n" +
                     "Upgrade the launch pad to raise the cap.",
-                    MessageSystemButton.MessageButtonColor.ORANGE,
-                    MessageSystemButton.ButtonIcons.FAIL);
-                MessageSystem.Instance.AddMessage(msg);
-            }
-
-            StartCoroutine(DetonateAfterDelay(3f));
-        }
-
-        private IEnumerator DetonateAfterDelay(float delay)
-        {
-            yield return new WaitForSeconds(delay);
-
-            var vessel = FlightGlobals.ActiveVessel;
-            if (vessel == null || vessel.parts == null) yield break;
-
-            // Copy first — Part.explode() mutates vessel.parts.
-            var parts = new List<Part>(vessel.parts);
-            foreach (var p in parts)
-            {
-                if (p != null) p.explode();
-            }
+                delay: 3f);
         }
     }
 
