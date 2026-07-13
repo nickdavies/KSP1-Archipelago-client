@@ -192,6 +192,26 @@ namespace KSPArchipelago
             if (!string.IsNullOrEmpty(bodyName)) _flownReveals.Add(bodyName);
         }
 
+        /// <summary>The current fly-there reveal set (for persisting to DataStorage).</summary>
+        public static IEnumerable<string> FlownReveals => _flownReveals;
+
+        /// <summary>
+        /// Seed the fly-there reveal set from persisted DataStorage on connect, so
+        /// <see cref="ApplyConfiguredHidden"/> leaves those bodies visible. Also
+        /// reveals any that are already hidden (in case the seed arrives after the
+        /// initial hide pass).
+        /// </summary>
+        public static void SeedFlownReveals(IEnumerable<string> names)
+        {
+            if (names == null) return;
+            foreach (var n in names)
+            {
+                if (string.IsNullOrEmpty(n)) continue;
+                _flownReveals.Add(n);
+                if (_hidden.ContainsKey(n)) RevealByName(n);
+            }
+        }
+
         /// <summary>Tear down on disconnect: reveal everything, forget the config.</summary>
         public static void ResetAll()
         {

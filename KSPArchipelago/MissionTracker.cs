@@ -925,6 +925,8 @@ namespace KSPArchipelago
                     Debug.Log($"[KSP-AP] Fly-to-reveal: entered SOI of hidden body {to.bodyName}");
                     BodyUnlockManager.RevealByName(to.bodyName);
                     BodyUnlockManager.MarkFlownReveal(to.bodyName);
+                    // Persist server-side so the reveal survives a restart.
+                    BodyDiscoveryStore.Save(session, BodyUnlockManager.FlownReveals);
                 }
                 else
                 {

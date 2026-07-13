@@ -317,6 +317,11 @@ namespace KSPArchipelago
         private Dictionary<string, string> _pendingBodyItemMap = null;
         private bool _pendingAllowUndiscovered = true;
         private bool _pendingDeepHide = true;
+        // Fly-there reveals retrieved asynchronously from AP DataStorage on
+        // connect; the callback stashes them here and Update() applies them on the
+        // main thread (SeedFlownReveals reveals any already hidden by then).
+        private List<string> _pendingFlownReveals = null;
+        private volatile bool _flownRevealsReady = false;
         // Set by HandleDisconnect (which may run on a worker thread) so the
         // main-thread Update drain reveals all bodies — BodyUnlockManager touches
         // Unity APIs and must not run off-thread.
@@ -652,6 +657,16 @@ namespace KSPArchipelago
             {
                 _bodyResetPending = false;
                 BodyUnlockManager.ResetAll();
+            }
+
+            // Apply persisted fly-there reveals once the async DataStorage read
+            // has returned. SeedFlownReveals reveals any that were already hidden
+            // by an earlier hide pass, so this is order-independent.
+            if (_flownRevealsReady)
+            {
+                List<string> flown;
+                lock (sessionLock) { flown = _pendingFlownReveals; _flownRevealsReady = false; }
+                BodyUnlockManager.SeedFlownReveals(flown);
             }
 
             if (_needsReset)
@@ -1143,6 +1158,13 @@ namespace KSPArchipelago
                                        || Convert.ToBoolean(dhObj);
                     Debug.Log($"[KSP-AP] Parsed body_item_map: {_pendingBodyItemMap.Count} hidden bodies " +
                               $"(allowUndiscovered={_pendingAllowUndiscovered}, deep={_pendingDeepHide})");
+                    // Retrieve persisted fly-there reveals asynchronously (no
+                    // blocking under sessionLock); Update() applies them main-thread.
+                    _flownRevealsReady = false;
+                    BodyDiscoveryStore.LoadAsync(newSession, list =>
+                    {
+                        lock (sessionLock) { _pendingFlownReveals = list; _flownRevealsReady = true; }
+                    });
                 }
 
                 NodeBands = new Dictionary<string, int>();
