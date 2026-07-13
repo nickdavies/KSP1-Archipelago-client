@@ -32,10 +32,10 @@ namespace KSPArchipelago.Contracts.Parameters
         // it, so honouring it keeps the contract's logic cost and the spawned
         // target in agreement.
         public double Sma = 0.0;
-        private bool _spawned = false;        // true only once a vessel actually exists
-        private uint _strandedVesselId = 0;
-        private float _nextAttempt = 0f;      // in-memory retry throttle (not persisted)
-        private Part _pendingEvaEquip = null; // EVA part awaiting a jetpack top-up (not persisted)
+        protected bool _spawned = false;        // true only once a vessel actually exists
+        protected uint _strandedVesselId = 0;
+        private float _nextAttempt = 0f;        // in-memory retry throttle (not persisted)
+        protected Part _pendingEvaEquip = null; // EVA part awaiting a jetpack top-up (not persisted)
 
         public RescueKerbalParameter() { }
 
@@ -137,14 +137,17 @@ namespace KSPArchipelago.Contracts.Parameters
             TrySpawn();
         }
 
-        private void TrySpawn()
+        // Spawn only from a stable scene where the game state is ready —
+        // never mid scene-load (that races KSP's own vessel loading).
+        protected static bool SpawnSceneReady()
+            => HighLogic.CurrentGame != null
+               && (FlightGlobals.ready
+                   || HighLogic.LoadedScene == GameScenes.SPACECENTER
+                   || HighLogic.LoadedScene == GameScenes.TRACKSTATION);
+
+        protected virtual void TrySpawn()
         {
-            // Spawn only from a stable scene where the game state is ready —
-            // never mid scene-load (that races KSP's own vessel loading).
-            if (HighLogic.CurrentGame == null) return;
-            if (!FlightGlobals.ready
-                && HighLogic.LoadedScene != GameScenes.SPACECENTER
-                && HighLogic.LoadedScene != GameScenes.TRACKSTATION) return;
+            if (!SpawnSceneReady()) return;
             try
             {
                 CelestialBody body = FlightGlobals.GetBodyByName(BodyName);
@@ -199,22 +202,7 @@ namespace KSPArchipelago.Contracts.Parameters
                     return;
                 }
                 _strandedVesselId = pv.persistentId;
-                // Mark the spawned vessel UNOWNED so the player can't just fly it
-                // or EVA the Kerbal — they must rendezvous and recover. Done on the
-                // proto AFTER AddVessel (null-safe): building the discovery into
-                // the vessel node NRE'd inside CreateVesselNode.
-                try
-                {
-                    pv.discoveryInfo = ProtoVessel.CreateDiscoveryNode(
-                        DiscoveryLevels.Unowned, UntrackedObjectClass.A,
-                        double.PositiveInfinity, double.PositiveInfinity);
-                    if (pv.vesselRef != null && pv.vesselRef.DiscoveryInfo != null)
-                        pv.vesselRef.DiscoveryInfo.SetLevel(DiscoveryLevels.Unowned);
-                }
-                catch (Exception dex)
-                {
-                    Debug.LogWarning($"[KSP-AP] rescue: could not set Unowned discovery: {dex.Message}");
-                }
+                MarkUnowned(pv);
                 _spawned = true;   // only NOW is the spawn real
                 Debug.Log($"[KSP-AP] rescue: spawned {KerbalName} ({pod.name}) in orbit of {BodyName}");
             }
@@ -223,6 +211,26 @@ namespace KSPArchipelago.Contracts.Parameters
                 // Do NOT latch _spawned — a transient failure must be retryable,
                 // and a persisted "spawned with no vessel" is the bug we're fixing.
                 Debug.LogError($"[KSP-AP] rescue spawn failed (will retry): {ex}");
+            }
+        }
+
+        // Mark the spawned vessel UNOWNED so the player can't just fly it or
+        // EVA the Kerbal — they must reach it and recover. Done on the proto
+        // AFTER AddVessel (null-safe): building the discovery into the vessel
+        // node NRE'd inside CreateVesselNode.
+        protected static void MarkUnowned(ProtoVessel pv)
+        {
+            try
+            {
+                pv.discoveryInfo = ProtoVessel.CreateDiscoveryNode(
+                    DiscoveryLevels.Unowned, UntrackedObjectClass.A,
+                    double.PositiveInfinity, double.PositiveInfinity);
+                if (pv.vesselRef != null && pv.vesselRef.DiscoveryInfo != null)
+                    pv.vesselRef.DiscoveryInfo.SetLevel(DiscoveryLevels.Unowned);
+            }
+            catch (Exception dex)
+            {
+                Debug.LogWarning($"[KSP-AP] rescue: could not set Unowned discovery: {dex.Message}");
             }
         }
 
@@ -240,7 +248,7 @@ namespace KSPArchipelago.Contracts.Parameters
             return null;
         }
 
-        private ProtoCrewMember ResolveOrCreateKerbal()
+        protected ProtoCrewMember ResolveOrCreateKerbal()
         {
             ProtoCrewMember existing = LookupKerbal(KerbalName);
             if (existing != null) return existing;
