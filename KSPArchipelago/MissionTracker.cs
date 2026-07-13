@@ -666,6 +666,11 @@ namespace KSPArchipelago
         // Reports all unchecked slots for a body/event pair (up to event scale).
         private void ReportBodyEvent(string bodyName, string eventName)
         {
+            // A hidden (undiscovered) body reports nothing — its checks are gated
+            // behind its Discover item in AP logic. Once revealed (by item or, in
+            // allow-undiscovered mode, by flying there), events fire normally.
+            if (BodyUnlockManager.IsHidden(bodyName)) return;
+
             if (!eventScale.TryGetValue(eventName, out int scale))
             {
                 Debug.LogWarning($"[KSP-AP] Unknown event type: '{eventName}'");
@@ -905,8 +910,35 @@ namespace KSPArchipelago
             // Leaving a moon back to its planet is filtered out because
             // data.from (the moon) != data.to.referenceBody (the planet's parent).
             if (!IsMissionVessel(data.host)) return;
-            if (data.to != null && data.from == data.to.referenceBody)
-                ReportBodyEvent(data.to.name, "Flyby");
+            CelestialBody to = data.to;
+            if (to == null) return;
+            bool arrivingFromParent = data.from == to.referenceBody;
+
+            // Arrival at a still-hidden body (from its parent SOI). In
+            // allow-undiscovered mode this reveals the body locally so the flyby
+            // check below fires; otherwise it's a fatal collision with a body the
+            // player couldn't see, and no check fires.
+            if (arrivingFromParent && BodyUnlockManager.IsHidden(to.bodyName))
+            {
+                if (BodyUnlockManager.AllowUndiscovered)
+                {
+                    Debug.Log($"[KSP-AP] Fly-to-reveal: entered SOI of hidden body {to.bodyName}");
+                    BodyUnlockManager.RevealByName(to.bodyName);
+                    BodyUnlockManager.MarkFlownReveal(to.bodyName);
+                }
+                else
+                {
+                    Debug.Log($"[KSP-AP] Undiscovered-body collision: {to.bodyName} — destroying {data.host?.vesselName}");
+                    var host = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
+                    if (host != null)
+                        VesselDestruction.Destroy(host, data.host,
+                            "<color=red>STRUCTURAL FAILURE:</color> collided with undiscovered body.");
+                    return;
+                }
+            }
+
+            if (arrivingFromParent)
+                ReportBodyEvent(to.name, "Flyby");
         }
 
         private void OnOrbit(Vessel vessel, CelestialBody body)

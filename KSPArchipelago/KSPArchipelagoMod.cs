@@ -62,6 +62,21 @@ namespace KSPArchipelago
                 return;
             }
 
+            // Discover-body items: reveal the celestial body. The item→body map
+            // comes from slot_data (body_item_map); reveals replay via
+            // ProcessAllItems on reconnect. No science, no part — just visibility.
+            if (BodyUnlockManager.TryGetBodyForItem(itemName, out string discoveredBody))
+            {
+                BodyUnlockManager.RevealByName(discoveredBody);
+                if (showToast)
+                {
+                    toastText = $"AP: Discovered {discoveredBody}";
+                    ScreenMessages.PostScreenMessage(toastText, 5f, ScreenMessageStyle.UPPER_CENTER);
+                    PostToMessageSystem(senderName, locationName, toastText);
+                }
+                return;
+            }
+
             var mod = UnityEngine.Object.FindObjectOfType<KSPArchipelagoMod>();
 
             // Contract items: record receipt only. Offering/accepting happens
@@ -294,6 +309,18 @@ namespace KSPArchipelago
         // Kerbin-home seeds with no science_values payload, so Reset() can
         // restore stock values on disconnect.
         private bool _stockSnapshotPending = false;
+
+        // Pending hidden-bodies config from slot_data (optional; null map = the
+        // feature is off for this seed). Parsed by HandleConnect on the connect
+        // worker; applied on the main thread in the _needsReset drain, before
+        // ProcessAllItems (needs FlightGlobals.Bodies).
+        private Dictionary<string, string> _pendingBodyItemMap = null;
+        private bool _pendingAllowUndiscovered = true;
+        private bool _pendingDeepHide = true;
+        // Set by HandleDisconnect (which may run on a worker thread) so the
+        // main-thread Update drain reveals all bodies — BodyUnlockManager touches
+        // Unity APIs and must not run off-thread.
+        private volatile bool _bodyResetPending = false;
 
         // Pending career-hack directives parsed from slot_data on the connect
         // worker thread. Update() drains and applies them on the main thread
@@ -619,6 +646,14 @@ namespace KSPArchipelago
                 }
             }
 
+            // Disconnect requested a body-visibility reset off-thread — do the
+            // Unity work here on the main thread.
+            if (_bodyResetPending)
+            {
+                _bodyResetPending = false;
+                BodyUnlockManager.ResetAll();
+            }
+
             if (_needsReset)
             {
                 _needsReset = false;
@@ -628,6 +663,9 @@ namespace KSPArchipelago
                 KSPArchipelagoPartsManager.ScrubTechTree();
                 KSPArchipelagoPartsManager.ClearAllExperimentalParts();
                 ResetProgressiveState();
+                // Hide the configured bodies BEFORE replaying items, so received
+                // Discover items re-open their bodies in ProcessAllItems.
+                ApplyBodyVisibility();
                 ProcessAllItems();
                 // All received items (incl. contract items) are now processed —
                 // offer/heal owed contracts once the scene + ContractSystem are ready.
@@ -732,6 +770,31 @@ namespace KSPArchipelago
             // visiting the VAB after receiving a Progressive Launch Pad
             // bumps the pad to level 3 on the way back to SC.
             CareerUpgradesManager.Instance?.ResetApGrantedLevels();
+        }
+
+        /// <summary>
+        /// Apply the seed's hidden-bodies config (parsed from slot_data). Runs on
+        /// the main thread inside the _needsReset rebuild, before ProcessAllItems,
+        /// so received Discover items re-reveal their bodies. A null map means the
+        /// feature is off — reveal anything a prior connect may have hidden.
+        /// </summary>
+        private void ApplyBodyVisibility()
+        {
+            Dictionary<string, string> map;
+            bool allow, deep;
+            lock (sessionLock)
+            {
+                map = _pendingBodyItemMap;
+                allow = _pendingAllowUndiscovered;
+                deep = _pendingDeepHide;
+            }
+            // No body config in slot_data => feature off; leave the current state
+            // (nothing to hide). A seed with the feature enabled always sends
+            // body_item_map (empty for all-visible), taking the branch below.
+            if (map == null) return;
+            BodyUnlockManager.DeepHide = deep;
+            BodyUnlockManager.Configure(map, allow);
+            BodyUnlockManager.ApplyConfiguredHidden();
         }
 
         /// <summary>
@@ -1063,6 +1126,25 @@ namespace KSPArchipelago
                 _scienceValuesPending = true;
                 _stockSnapshotPending = true;
 
+                // Optional: hidden-bodies config. Present only when the
+                // BodyVisibilityMode option is enabled; absent ⇒ feature off.
+                // body_item_map is { "Discover <Body>": "<bodyName>" }.
+                _pendingBodyItemMap = null;
+                _pendingAllowUndiscovered = true;
+                _pendingDeepHide = true;
+                if (sd.TryGetValue("body_item_map", out object bimObj) && bimObj is JObject bimDict)
+                {
+                    _pendingBodyItemMap = new Dictionary<string, string>();
+                    foreach (var e in bimDict)
+                        _pendingBodyItemMap[e.Key] = (string)e.Value;
+                    _pendingAllowUndiscovered = !sd.TryGetValue("allow_undiscovered_bodies", out object auObj)
+                                                || Convert.ToBoolean(auObj);
+                    _pendingDeepHide = !sd.TryGetValue("deep_hide", out object dhObj)
+                                       || Convert.ToBoolean(dhObj);
+                    Debug.Log($"[KSP-AP] Parsed body_item_map: {_pendingBodyItemMap.Count} hidden bodies " +
+                              $"(allowUndiscovered={_pendingAllowUndiscovered}, deep={_pendingDeepHide})");
+                }
+
                 NodeBands = new Dictionary<string, int>();
                 if (sd.TryGetValue("node_bands", out object bandsObj) && bandsObj is JObject bandsDict)
                 {
@@ -1089,6 +1171,7 @@ namespace KSPArchipelago
                     _pendingScienceValues = null;
                     _scienceValuesPending = false;
                     _stockSnapshotPending = false;
+                    _pendingBodyItemMap = null;
                     return;
                 }
 
@@ -1118,6 +1201,7 @@ namespace KSPArchipelago
                     _pendingScienceValues = null;
                     _scienceValuesPending = false;
                     _stockSnapshotPending = false;
+                    _pendingBodyItemMap = null;
                     return;
                 }
 
@@ -1164,9 +1248,13 @@ namespace KSPArchipelago
                 // disconnect/quit returns to vanilla KSP science economy.
                 // ScienceScaling.Reset is a no-op if no snapshot was taken.
                 ScienceScaling.Reset();
+                // Reveal any hidden bodies on the main thread (see _bodyResetPending)
+                // so a disconnect/quit returns to a fully-visible solar system.
+                _bodyResetPending = true;
                 _pendingScienceValues = null;
                 _scienceValuesPending = false;
                 _stockSnapshotPending = false;
+                _pendingBodyItemMap = null;
                 _pendingCareerDirectives = null;
                 // Stop hacking funds/rep/contract-cap; player keeps what they have.
                 CareerHackManager.Instance?.Reset();
