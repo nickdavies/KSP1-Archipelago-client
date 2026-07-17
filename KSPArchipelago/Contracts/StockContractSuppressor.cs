@@ -71,6 +71,22 @@ namespace KSPArchipelago.Contracts
             string save = HighLogic.SaveFolder;
             if (_suppressedSaveFolder == save) return;
 
+            // Pre-connect guard. The full suppression below is gated on
+            // IsConnected, but KSP registers every Contract subclass — including
+            // our abstract ApContract base — in ContractSystem.ContractTypes via
+            // startup reflection, and the stock generation daemon runs
+            // independently of AP. If it picks the abstract base it calls
+            // Activator.CreateInstance on it and throws MissingMethodException
+            // ("Default constructor not found") — long before we ever connect.
+            // Strip the abstract AP types every frame until connected so the
+            // daemon can never hit one. Concrete AP contracts are safe: they
+            // self-skip in GeneratePopulate/MeetRequirements when unbound.
+            int strippedAbstract = StripAbstractApContractTypes();
+            if (strippedAbstract > 0)
+                Debug.Log($"[KSP-AP] StockContractSuppressor: stripped "
+                        + $"{strippedAbstract} abstract AP contract type(s) from "
+                        + "the stock generation pool (pre-connect guard).");
+
             // Only suppress when AP is actually driving this session.
             // Without AP, stock contracts are still the player's only
             // gameplay loop — removing them would soft-lock vanilla Career.
@@ -99,23 +115,64 @@ namespace KSPArchipelago.Contracts
         /// </summary>
         private static int SuppressNonApContractTypes()
         {
-            int removed = 0;
             if (ContractSystem.ContractTypes == null) return 0;
 
             // Snapshot first — modifying while iterating is unsafe.
             // Remove everything that isn't a CONCRETE ApContract subclass. The
-            // abstract ApContract base would otherwise stay in ContractTypes,
-            // and KSP throws MissingMethodException ("Default constructor not
-            // found") every time it tries to instantiate it on a progress node.
+            // abstract base is normally already gone (StripAbstractApContractTypes
+            // runs pre-connect), but the IsAbstract clause keeps this pass
+            // correct on its own.
             List<Type> targets = ContractSystem.ContractTypes
                 .Where(t => t != null
                             && (!typeof(ApContract).IsAssignableFrom(t) || t.IsAbstract))
                 .ToList();
 
+            RemoveContractTypes(targets);
+            return targets.Count;
+        }
+
+        /// <summary>
+        /// Remove abstract ApContract-derived types (e.g. the ApContract base)
+        /// from ContractSystem.ContractTypes. KSP registers every Contract
+        /// subclass via startup reflection, and its stock generation daemon —
+        /// which runs independently of the AP connection — throws
+        /// MissingMethodException if it tries to Activator.CreateInstance an
+        /// abstract type. Always safe to run: concrete AP contracts self-skip
+        /// generation when unbound, so only the abstract types need removing.
+        /// Scoped to ApContract-derived types so vanilla / third-party contract
+        /// types are never touched when AP isn't driving. Returns count removed.
+        /// </summary>
+        private static int StripAbstractApContractTypes()
+        {
+            List<Type> types = ContractSystem.ContractTypes;
+            if (types == null) return 0;
+
+            // Manual scan (no LINQ allocation) so the steady-state per-frame
+            // call in the never-connected case stays allocation-free.
+            List<Type> targets = null;
+            foreach (Type t in types)
+            {
+                if (t != null && t.IsAbstract && typeof(ApContract).IsAssignableFrom(t))
+                {
+                    if (targets == null) targets = new List<Type>();
+                    targets.Add(t);
+                }
+            }
+            if (targets == null) return 0;
+
+            RemoveContractTypes(targets);
+            return targets.Count;
+        }
+
+        /// <summary>
+        /// Remove each target Type from ContractSystem.ContractTypes and
+        /// MandatoryTypes. While-loops guard against duplicate registrations
+        /// (the career probe observed the same Type listed more than once).
+        /// </summary>
+        private static void RemoveContractTypes(List<Type> targets)
+        {
             foreach (Type t in targets)
             {
-                // While-loop in case the same Type is duplicated (probe
-                // saw this pattern; defensive).
                 while (ContractSystem.ContractTypes.Contains(t))
                 {
                     ContractSystem.ContractTypes.Remove(t);
@@ -127,9 +184,7 @@ namespace KSPArchipelago.Contracts
                         ContractSystem.MandatoryTypes.Remove(t);
                     }
                 }
-                removed++;
             }
-            return removed;
         }
 
         /// <summary>
