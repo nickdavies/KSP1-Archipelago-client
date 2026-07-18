@@ -6,8 +6,9 @@ using System.Runtime.InteropServices;
 
 public static class WinConsole
 {
-    // Code taken from: https://stackoverflow.com/a/48864902
-    static public void Initialize(bool alwaysCreateNewConsole = true)
+    // Code adapted from: https://stackoverflow.com/a/48864902
+    //
+    static public void Initialize(bool alwaysCreateNewConsole = false)
     {
         // Win32 console APIs don't exist on Linux/macOS — stdout/stderr
         // already work there, so skip the P/Invoke entirely.
@@ -15,12 +16,14 @@ public static class WinConsole
             || Environment.OSVersion.Platform == PlatformID.MacOSX)
             return;
 
-        bool consoleAttached = true;
-        if (alwaysCreateNewConsole
-            || (AttachConsole(ATTACH_PARRENT) == 0
-            && Marshal.GetLastWin32Error() != ERROR_ACCESS_DENIED))
+        bool consoleAttached;
+        if (alwaysCreateNewConsole)
         {
             consoleAttached = AllocConsole() != 0;
+        }
+        else
+        {
+            consoleAttached = AttachConsole(ATTACH_PARRENT) != 0;
         }
 
         if (consoleAttached)
