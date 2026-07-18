@@ -9,6 +9,8 @@ using Archipelago.MultiClient.Net;
 using Archipelago.MultiClient.Net.Enums;
 using Archipelago.MultiClient.Net.Models;
 using Archipelago.MultiClient.Net.Helpers;
+using Archipelago.MultiClient.Net.BounceFeatures.DeathLink;
+using Archipelago.MultiClient.Net.Exceptions;
 
 
 namespace KSPArchipelago
@@ -263,6 +265,21 @@ namespace KSPArchipelago
         private readonly object sessionLock = new object();
         private ArchipelagoSession session;
         private MissionTracker missionTracker;
+
+        // --- DeathLink ---
+        // Library service, created per-connect only when the seed enabled DeathLink.
+        // Manages the "DeathLink" tag and Bounce send/receive for us.
+        private DeathLinkService _deathLink;
+        // Incoming death, coalesced to at most one pending kill. Set on the socket
+        // thread by OnDeathLinkReceived, drained on the main thread in Update().
+        private readonly object _deathLock = new object();
+        private bool _hasPendingDeath = false;
+        private string _pendingDeathCause = null;
+        // Main-thread-only: the vessel the pending kill has been "armed" against and
+        // whether it's a fresh launch (wait 30s of mission time) or an existing
+        // in-flight craft (kill on the next frame). uint.MaxValue == not yet armed.
+        private uint _deathArmedVesselId = uint.MaxValue;
+        private bool _deathArmedDelay = false;
         /// <summary>
         /// Public accessor so career-mode managers can fire location checks
         /// without re-implementing the AP-session plumbing. Returns null
@@ -575,6 +592,9 @@ namespace KSPArchipelago
                     ScreenMessages.PostScreenMessage(toast, 6f, ScreenMessageStyle.UPPER_CENTER);
                 }
             }
+
+            // Apply a queued incoming DeathLink on the main thread.
+            DrainPendingDeath();
 
             // Drain pending bridge invocation set by HandleConnect on
             // a worker thread. Materialiser ultimately clones Unity
@@ -1000,6 +1020,8 @@ namespace KSPArchipelago
                 Goal = sd.TryGetValue("goal", out object goalObj) ? Convert.ToInt32(goalObj) : 0;
                 Difficulty = sd.TryGetValue("difficulty", out object diffObj) ? Convert.ToInt32(diffObj) : -1;
                 if (Difficulty < 0) missing.Add("difficulty");
+                // Optional: DeathLink. Absent on old seeds -> off. Not a required key.
+                bool deathLink = sd.TryGetValue("death_link", out object dlObj) && Convert.ToInt32(dlObj) != 0;
                 if (sd.TryGetValue("starting_body", out object sbObj))
                     StartingBody = (string)sbObj;
 
@@ -1261,6 +1283,20 @@ namespace KSPArchipelago
                 string trackerError = missionTracker.OnConnect(session, Difficulty, TechSlotsPerNode,
                     onLocationReported: () => { LocationsCheckedCount++; _thresholdsDirty = true; },
                     onSendFailed: reason => Console?.NotifyConnectionLost(reason),
+                    onDeath: deathLink ? (Action<string>)(cause =>
+                    {
+                        // Fired from the tracker's crash / crew-death guards. Send is
+                        // best-effort: a dropped socket throws and the reconnect logic
+                        // recovers, so a lost death broadcast is acceptable.
+                        var svc = _deathLink;
+                        if (svc == null) return;
+                        try
+                        {
+                            svc.SendDeathLink(new DeathLink(ConnectedSlot, ConnectedSlot + " " + cause));
+                            Debug.Log($"[KSP-AP] DeathLink sent (source={ConnectedSlot}, cause={cause}).");
+                        }
+                        catch (ArchipelagoSocketClosedException) { }
+                    }) : null,
                     slotData: sd);
                 if (trackerError != null)
                 {
@@ -1307,6 +1343,18 @@ namespace KSPArchipelago
                         _pendingServerFiredTraps = t.Result ?? new int[0];
                 });
 
+                // DeathLink: create the library service (it manages the "DeathLink"
+                // connection tag + Bounce send/receive) and subscribe to incoming
+                // deaths. Only when the seed enabled it. Torn down in HandleDisconnect;
+                // a reconnect builds a fresh session and re-creates it here.
+                if (deathLink)
+                {
+                    _deathLink = session.CreateDeathLinkService();
+                    _deathLink.OnDeathLinkReceived += OnDeathLinkReceived;
+                    _deathLink.EnableDeathLink();
+                    Debug.Log("[KSP-AP] DeathLink enabled.");
+                }
+
                 // Parse goal location sentinels from slot data.
                 var goalLocNames = new List<string>();
                 if (sd.TryGetValue("goal_locations", out object glObj) && glObj is JArray glArr)
@@ -1341,6 +1389,16 @@ namespace KSPArchipelago
                 Traps.TrapManager.OnDisconnect();
                 missionTracker?.OnDisconnect();
                 FindObjectOfType<TechTreeScout>()?.OnDisconnect();
+                // Drop the DeathLink service with the session; a reconnect recreates
+                // it. Discard any queued incoming death so it can't fire post-reconnect.
+                if (_deathLink != null)
+                {
+                    _deathLink.OnDeathLinkReceived -= OnDeathLinkReceived;
+                    _deathLink = null;
+                }
+                lock (_deathLock) { _hasPendingDeath = false; _pendingDeathCause = null; }
+                _deathArmedVesselId = uint.MaxValue;
+                _deathArmedDelay = false;
                 session = null;
                 ConnectedSlot = null;
                 // Restore CelestialBody.scienceValues to stock so a
@@ -1358,6 +1416,65 @@ namespace KSPArchipelago
                 // Stop hacking funds/rep/contract-cap; player keeps what they have.
                 CareerHackManager.Instance?.Reset();
             }
+        }
+
+        // Incoming DeathLink (runs on the socket thread). Coalesce to a single
+        // pending kill — ten deaths received while sitting in a menu still apply
+        // as one. The main-thread DrainPendingDeath() decides when/how to destroy
+        // the craft (Unity APIs aren't safe off the main thread).
+        private void OnDeathLinkReceived(DeathLink death)
+        {
+            lock (_deathLock)
+            {
+                _pendingDeathCause = !string.IsNullOrEmpty(death.Cause)
+                    ? death.Cause
+                    : ((death.Source ?? "Someone") + " died");
+                _hasPendingDeath = true;
+            }
+            Debug.Log($"[KSP-AP] DeathLink received from '{death.Source}' (cause: {death.Cause}) — queued.");
+        }
+
+        // Apply a queued incoming death on the main thread. Called every frame from
+        // Update(). Waits until the player is actually flying a craft, then:
+        //   • fresh launch (PRELAUNCH)      -> destroy 30s of mission time in
+        //   • switched-to existing craft    -> destroy on the next frame
+        // The kill routes through VesselDestruction.Destroy with the pad's 3s RUD
+        // countdown, and pre-marks the victim so the resulting crash can't rebroadcast.
+        private void DrainPendingDeath()
+        {
+            bool pending;
+            string cause;
+            lock (_deathLock) { pending = _hasPendingDeath; cause = _pendingDeathCause; }
+            if (!pending) return;
+
+            if (!HighLogic.LoadedSceneIsFlight) { _deathArmedVesselId = uint.MaxValue; return; }
+            Vessel v = FlightGlobals.ActiveVessel;
+            if (v == null) { _deathArmedVesselId = uint.MaxValue; return; }
+
+            // Arm once per vessel: decide fresh-launch vs existing craft up front,
+            // so a craft that starts PRELAUNCH keeps its 30s window even after it
+            // leaves the PRELAUNCH situation.
+            if (_deathArmedVesselId != v.persistentId)
+            {
+                _deathArmedVesselId = v.persistentId;
+                _deathArmedDelay = v.situation == Vessel.Situations.PRELAUNCH;
+            }
+
+            if (_deathArmedDelay && v.missionTime < 30.0) return;   // fresh launch: wait 30s of mission time
+
+            // Fire. Clear pending first so a death arriving mid-destruction re-arms
+            // cleanly against the next craft rather than double-killing this one.
+            lock (_deathLock) { _hasPendingDeath = false; _pendingDeathCause = null; }
+            _deathArmedVesselId = uint.MaxValue;
+
+            // Pre-mark BEFORE Destroy so the explosion's crash/crew-death events
+            // can't broadcast a DeathLink back (anti-loop).
+            missionTracker?.SuppressDeathSend(v.persistentId);
+            Debug.Log($"[KSP-AP] DeathLink applying kill to '{v.vesselName}' (cause: {cause}).");
+            VesselDestruction.Destroy(
+                this, v,
+                $"<color=red>DEATHLINK:</color> {cause}",
+                delay: 3f);
         }
 
         private void OnGameStateLoad(ConfigNode config)

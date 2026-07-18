@@ -21,6 +21,14 @@ namespace KSPArchipelago
     {
         private static readonly HashSet<uint> _destroying = new HashSet<uint>();
 
+        /// <summary>
+        /// True while this vessel is being destroyed by the mod (over-mass gate,
+        /// SOI-collision gate, or a received DeathLink). The DeathLink send path
+        /// checks this so a mod-initiated kill never rebroadcasts a death — only
+        /// a crash the player actually caused does.
+        /// </summary>
+        public static bool IsDestroying(uint persistentId) => _destroying.Contains(persistentId);
+
         /// <param name="messageTitle">
         /// When non-empty, also adds a persistent Message-System tray entry (the
         /// pad wants a record). The SOI-collision path leaves it null → the
