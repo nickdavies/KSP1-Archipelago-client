@@ -18,6 +18,9 @@ namespace KSPArchipelago
         public float TotalApScienceAwarded;
         public HashSet<int> AwardedItemIndices = new HashSet<int>();
         public HashSet<string> PendingLocationNames = new HashSet<string>();
+        // Received-but-not-yet-fired traps. A List, not a set: two copies of
+        // the same trap are two distinct firings (distinct item indices).
+        public List<Traps.PendingTrap> PendingTraps = new List<Traps.PendingTrap>();
 
         public override void OnAwake()
         {
@@ -30,6 +33,11 @@ namespace KSPArchipelago
             node.AddValue("awardedItems", string.Join(",", AwardedItemIndices));
             if (PendingLocationNames.Count > 0)
                 node.AddValue("pendingLocations", string.Join("|", PendingLocationNames));
+
+            // Pending traps: one value per entry, "index|name" (trap item
+            // names never contain '|').
+            foreach (var trap in PendingTraps)
+                node.AddValue("pendingTrap", $"{trap.Index}|{trap.Name}");
 
             // Career-mode facility AP-granted levels. Per-facility key=value
             // pairs joined by '|' so a save with no Career-mode state stays
@@ -66,6 +74,25 @@ namespace KSPArchipelago
                 foreach (string s in pendingRaw.Split('|'))
                     if (!string.IsNullOrEmpty(s))
                         PendingLocationNames.Add(s);
+
+            // Pending traps: REPLACE, deliberately the opposite of the merge
+            // above. After any load, ProcessAllItems replays AllItemsReceived
+            // and re-enqueues every trap whose index is missing from the
+            // restored AwardedItemIndices, and FiredTrapStore (persisted
+            // OUTSIDE the save) filters traps already suffered. Merging here
+            // would double-enqueue the save-file entries on every revert.
+            PendingTraps.Clear();
+            foreach (string trapRaw in node.GetValues("pendingTrap"))
+            {
+                int sep = trapRaw.IndexOf('|');
+                if (sep <= 0) continue;
+                if (!int.TryParse(trapRaw.Substring(0, sep), out int trapIdx)) continue;
+                PendingTraps.Add(new Traps.PendingTrap
+                {
+                    Index = trapIdx,
+                    Name = trapRaw.Substring(sep + 1),
+                });
+            }
 
             // Career-mode facility AP-granted levels. Hydrate
             // CareerUpgradesManager state and apply SetLevel on the live

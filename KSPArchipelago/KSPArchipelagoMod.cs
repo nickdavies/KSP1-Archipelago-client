@@ -6,6 +6,7 @@ using Newtonsoft.Json.Linq;
 using UnityEngine;
 using KSP.UI.Screens;
 using Archipelago.MultiClient.Net;
+using Archipelago.MultiClient.Net.Enums;
 using Archipelago.MultiClient.Net.Models;
 using Archipelago.MultiClient.Net.Helpers;
 
@@ -44,9 +45,18 @@ namespace KSPArchipelago
         /// </summary>
         public static void GiveItem(string itemName, string senderName,
                                     string locationName,
-                                    bool showToast = true)
+                                    bool showToast = true,
+                                    ItemFlags flags = ItemFlags.None)
         {
             string toastText;
+
+            // Trap items: recognized here ONLY to stay out of the part-lookup
+            // fallthrough below. All trap state (queue, toasts, firing) runs
+            // at the awarded-index sites via TrapManager.NoteReceived —
+            // GiveItem replays in the EDITOR with a null scenario and must
+            // stay side-effect free for traps.
+            if (Traps.TrapManager.IsTrapItem(itemName) || (flags & ItemFlags.Trap) != 0)
+                return;
 
             // Science packs: toast only. R&D award and TotalApScienceAwarded are
             // written together by the caller (ProcessAllItems / ProcessNewItems) so
@@ -744,6 +754,20 @@ namespace KSPArchipelago
 
             missionTracker?.Update();
 
+            // Server fired-trap set arrived — merge on the main thread before
+            // any Drain can fire (IsLoaded stays false until this lands).
+            // Indexes only the local file knew get pushed back up.
+            if (_pendingServerFiredTraps != null)
+            {
+                int[] localOnly = Traps.FiredTrapStore.MergeServer(_pendingServerFiredTraps);
+                _pendingServerFiredTraps = null;
+                if (localOnly.Length > 0)
+                    PushFiredTraps(localOnly);
+            }
+
+            // Fire owed traps (flight scene only; gates + pacing inside).
+            Traps.TrapManager.Drain(this);
+
             if (!_goalSent && session != null && missionTracker != null && missionTracker.IsGoalMet())
             {
                 _goalSent = true;
@@ -843,11 +867,12 @@ namespace KSPArchipelago
                 bool alreadyAwarded = awarded != null && awarded.Contains(i);
                 KSPArchipelagoPartsManager.GiveItem(
                     item.ItemName, item.Player?.Alias, item.LocationName,
-                    showToast: !alreadyAwarded);
+                    showToast: !alreadyAwarded, flags: item.Flags);
 
                 if (!alreadyAwarded && scenario != null)
                 {
                     awarded.Add(i);
+                    Traps.TrapManager.NoteReceived(i, item.ItemName, item.Flags);
                     if (KSPArchipelagoPartsManager.TryGetScienceAmount(item.ItemName, out float sciAmt))
                     {
                         if (ResearchAndDevelopment.Instance != null)
@@ -891,7 +916,7 @@ namespace KSPArchipelago
                 bool alreadyAwarded = awarded.Contains(i);
                 KSPArchipelagoPartsManager.GiveItem(
                     item.ItemName, item.Player?.Alias, item.LocationName,
-                    showToast: !alreadyAwarded);
+                    showToast: !alreadyAwarded, flags: item.Flags);
 
                 // A contract item arrived — request a reconcile so it gets
                 // offered/activated without waiting for a scene change.
@@ -901,6 +926,7 @@ namespace KSPArchipelago
                 if (!alreadyAwarded)
                 {
                     awarded.Add(i);
+                    Traps.TrapManager.NoteReceived(i, item.ItemName, item.Flags);
                     if (KSPArchipelagoPartsManager.TryGetScienceAmount(item.ItemName, out float sciAmt))
                     {
                         if (ResearchAndDevelopment.Instance != null)
@@ -917,6 +943,30 @@ namespace KSPArchipelago
 
         // Deferred error: set on background thread, shown by Update() on main thread.
         private volatile string _slotDataError = null;
+
+        // Server-side fired-trap set: written by the DataStorage GetAsync
+        // callback (websocket thread), merged into FiredTrapStore by Update().
+        private volatile int[] _pendingServerFiredTraps;
+
+        /// <summary>Append fired trap indexes to the server-side record
+        /// (Scope.Slot DataStorage — the authoritative fire-once set).</summary>
+        public void PushFiredTrap(int itemIndex) => PushFiredTraps(new[] { itemIndex });
+
+        public void PushFiredTraps(int[] itemIndices)
+        {
+            try
+            {
+                if (session != null)
+                    session.DataStorage[Scope.Slot, "FiredTraps"] += itemIndices;
+            }
+            catch (Exception ex)
+            {
+                // Socket died mid-write: the local file still has the index,
+                // so the worst case is one extra fire on a machine without it.
+                Debug.LogWarning(
+                    $"[KSP-AP] PushFiredTraps({itemIndices.Length}) failed: {ex.Message}");
+            }
+        }
 
         public void HandleConnect(ArchipelagoSession newSession, LoginSuccessful loginData, string slotName)
         {
@@ -1231,6 +1281,32 @@ namespace KSPArchipelago
                 // career directives for the main-thread drain in Update().
                 _pendingCareerDirectives = careerDirectives;
 
+                // Fire-once-ever trap record. The AP server's DataStorage is
+                // the source of truth (survives client reinstalls and the
+                // deploy pipeline wiping PluginData — which really happened);
+                // the local file is a secondary cache covering fires whose
+                // server write was lost to a disconnect. Drain stays blocked
+                // until BOTH are in (FiredTrapStore.IsLoaded).
+                Traps.FiredTrapStore.Load(
+                    HighLogic.SaveFolder, newSession.RoomState?.Seed, slotName);
+                _pendingServerFiredTraps = null;
+                var firedTrapsElement =
+                    newSession.DataStorage[Scope.Slot, "FiredTraps"];
+                firedTrapsElement.Initialize(new int[0]);
+                firedTrapsElement.GetAsync<int[]>().ContinueWith(t =>
+                {
+                    // Worker thread — publish for the main-thread drain.
+                    if (t.IsFaulted || t.IsCanceled)
+                    {
+                        Debug.LogWarning("[KSP-AP] FiredTraps DataStorage read failed: "
+                            + t.Exception?.GetBaseException().Message);
+                        return;   // store stays un-synced; no trap can fire
+                    }
+                    // Guard against a stale continuation from a prior session.
+                    if (session == newSession)
+                        _pendingServerFiredTraps = t.Result ?? new int[0];
+                });
+
                 // Parse goal location sentinels from slot data.
                 var goalLocNames = new List<string>();
                 if (sd.TryGetValue("goal_locations", out object glObj) && glObj is JArray glArr)
@@ -1262,6 +1338,7 @@ namespace KSPArchipelago
         {
             lock (sessionLock)
             {
+                Traps.TrapManager.OnDisconnect();
                 missionTracker?.OnDisconnect();
                 FindObjectOfType<TechTreeScout>()?.OnDisconnect();
                 session = null;
@@ -1296,6 +1373,10 @@ namespace KSPArchipelago
 
         private void OnSceneChange(GameScenes scene)
         {
+            // Abort any live trap effect before the scene tears down (the
+            // pending queue is save-tied state and survives).
+            Traps.TrapManager.OnSceneChange();
+
             // A scene load was requested — the current ContractSystem is about
             // to tear down/reload. Stop reconciling until the new scene's GUI
             // is ready AND contracts have reloaded, so we never add a contract

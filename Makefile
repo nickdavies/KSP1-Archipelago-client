@@ -71,9 +71,10 @@ stage: compile $(OUT_DIR)/ap_placeholders.cfg
 	cp KSPArchipelago.KSC/Heightmaps/APKSC_KerbinCurve.png $(OUT_DIR)/Heightmaps/
 	cp KSPArchipelago.KSC/Heightmaps/APKSC_KerbinCurve.cfg $(OUT_DIR)/Heightmaps/
 
-# Deploy staged output to KSP GameData.
+# Deploy staged output to KSP GameData. PluginData is mod-written state
+# (fired-trap record) — excluded so --delete can't wipe it on redeploy.
 install: stage
-	rsync -a --delete $(OUT_DIR)/ "$(KSP_DIR)/$(MOD_SUBDIR)/"
+	rsync -a --delete --exclude=/PluginData $(OUT_DIR)/ "$(KSP_DIR)/$(MOD_SUBDIR)/"
 
 # Build, install, then launch KSP.
 run: install
