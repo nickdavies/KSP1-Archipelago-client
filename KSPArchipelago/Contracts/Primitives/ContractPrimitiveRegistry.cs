@@ -12,21 +12,27 @@ namespace KSPArchipelago.Contracts.Primitives
     /// build time. This is the runtime half of the client/server drift
     /// mitigation (version handshake + whitelist).
     ///
-    /// Schema 6 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
+    /// Schema 7 primitives: <c>situation</c>, <c>resource</c>, <c>has_any_part</c>,
     /// <c>crew_capacity</c>, <c>plant_flag</c>, <c>sample_return</c>, <c>has_system</c>,
     /// <c>specific_orbit</c>, <c>collect_science</c>, <c>rescue</c>,
-    /// <c>surface_rescue</c>. (Schema 3 changed the wire format: a single
-    /// <c>location</c> became a <c>locations</c> array. Schema 4 added the
-    /// <c>rescue</c> primitive, which spawns a stranded Kerbal — the first
-    /// world-mutating primitive. Schema 5 lets a non-goal contract's
+    /// <c>surface_rescue</c>, <c>docking</c>, <c>survey_waypoint</c>,
+    /// <c>tourist</c>. (Schema 3 changed the
+    /// wire format: a single <c>location</c> became a <c>locations</c> array.
+    /// Schema 4 added the <c>rescue</c> primitive, which spawns a stranded Kerbal
+    /// — the first world-mutating primitive. Schema 5 lets a non-goal contract's
     /// <c>locations</c> array hold more than 2 entries; the parser already
     /// reads it as a variable-length list, so no new vocabulary. Schema 6
-    /// added <c>surface_rescue</c>: a Kerbal stranded ON a body's surface.)
+    /// added <c>surface_rescue</c>: a Kerbal stranded ON a body's surface.
+    /// Schema 7 added three stock-backed run-variety types: <c>docking</c>
+    /// (event-based, repeatable dock at a body), <c>survey_waypoint</c>
+    /// (deterministic ground survey site), and <c>tourist</c>
+    /// (resolve-or-create tourism). A <c>part_test</c> primitive is deferred
+    /// pending an in-game-validated custom parameter.)
     /// </summary>
     public static class ContractPrimitiveRegistry
     {
         /// <summary>Highest primitive-registry schema this client understands.</summary>
-        public const int Schema = 6;
+        public const int Schema = 7;
 
         private static readonly Dictionary<string, IContractPrimitive> _byKind
             = new Dictionary<string, IContractPrimitive>(StringComparer.Ordinal);
@@ -44,6 +50,9 @@ namespace KSPArchipelago.Contracts.Primitives
             Register(new CollectSciencePrimitive());
             Register(new RescuePrimitive());
             Register(new SurfaceRescuePrimitive());
+            Register(new DockingPrimitive());
+            Register(new SurveyWaypointPrimitive());
+            Register(new TouristPrimitive());
         }
 
         private static void Register(IContractPrimitive primitive)

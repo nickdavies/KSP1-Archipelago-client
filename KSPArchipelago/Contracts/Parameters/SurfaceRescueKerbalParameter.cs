@@ -1,7 +1,6 @@
 using System;
 using System.Globalization;
 using Contracts;
-using FinePrint;
 using FinePrint.Utilities;
 using UnityEngine;
 
@@ -36,8 +35,6 @@ namespace KSPArchipelago.Contracts.Parameters
         private double _siteLon = 0.0;
         private bool _sitePicked = false;
         private bool _evaEquipped = false;
-
-        private const int SitePickAttempts = 50;
 
         public SurfaceRescueKerbalParameter() { }
 
@@ -125,35 +122,14 @@ namespace KSPArchipelago.Contracts.Parameters
             }
         }
 
-        // Deterministic site pick: FinePrint's random water-free position,
-        // re-rolled until it falls inside the seeded latitude bound. On
-        // exhaustion (a mostly-ocean latitude band) accept the smallest-|lat|
-        // water-free candidate and log — still water-free, marginally beyond
-        // what the generator charged, and deterministic either way.
+        // Deterministic site pick via the shared seeded-site helper (FinePrint's
+        // random water-free position, re-rolled until inside the seeded latitude
+        // bound). Returns false only when the body has no terrain data yet —
+        // retry on the throttle.
         private bool PickSite(CelestialBody body)
         {
-            var rng = new System.Random(SiteSeed);
-            double bestLat = double.NaN, bestLon = 0.0;
-            for (int i = 0; i < SitePickAttempts; i++)
-            {
-                double lat, lon;
-                WaypointManager.ChooseRandomPosition(
-                    out lat, out lon, body.GetName(),
-                    waterAllowed: false, equatorial: false, generator: rng);
-                if (double.IsNaN(bestLat) || Math.Abs(lat) < Math.Abs(bestLat))
-                {
-                    bestLat = lat;
-                    bestLon = lon;
-                }
-                if (Math.Abs(bestLat) <= LatBound) break;
-            }
-            if (double.IsNaN(bestLat)) return false;   // no terrain data yet — retry
-            if (Math.Abs(bestLat) > LatBound)
-                Debug.LogWarning($"[KSP-AP] surface rescue: no land within ±{LatBound:F1}° "
-                               + $"on {BodyName} after {SitePickAttempts} tries; "
-                               + $"using lat {bestLat:F2}");
-            _siteLat = bestLat;
-            _siteLon = bestLon;
+            if (!SeededSites.PickSite(body, SiteSeed, LatBound, out _siteLat, out _siteLon))
+                return false;
             _sitePicked = true;
             return true;
         }

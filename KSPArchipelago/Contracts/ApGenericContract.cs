@@ -64,7 +64,15 @@ namespace KSPArchipelago.Contracts
             foreach (var paramSpec in spec.Parameters)
             {
                 ContractParameter param = ContractPrimitiveRegistry.Build(paramSpec);
-                if (param != null) AddParameter(param);
+                if (param == null) continue;
+                AddParameter(param);
+                // A parameter that nests stock KSP params must build that subtree
+                // only after it's attached here — its Root is now set, so the
+                // nested children root correctly and Contract.Generate's hash pass
+                // won't NRE. Still before Register, so the children are present for
+                // its recursion. See IContractParameterPostAttach.
+                if (param is IContractParameterPostAttach postAttach)
+                    postAttach.OnContractAttached();
             }
 
             Debug.Log($"[KSP-AP] ApGenericContract bound to '{BoundLocation}' "

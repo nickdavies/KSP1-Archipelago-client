@@ -148,6 +148,23 @@ namespace KSPArchipelago
             ApplyBuildingLevels();
             AssertFunds();
             AssertReputation();
+            AssertCrewParams();
+        }
+
+        // Force the game parameters that keep a crewed contract (crew-trait,
+        // tourism) from ever permanently stranding on a lost specialist/tourist:
+        //   - MissingCrewsRespawn: a killed Kerbal returns rather than dies, so a
+        //     needed trait / the tourist is never gone for good.
+        //   - AutoHireCrews: combined with InfiniteFunds (and the maxed Astronaut
+        //     Complex), a needed trait is always obtainable at launch — "free
+        //     hiring". Re-asserted every scene load like the economy hacks, since
+        //     save reverts reset difficulty parameters.
+        private void AssertCrewParams()
+        {
+            var difficulty = HighLogic.CurrentGame?.Parameters?.Difficulty;
+            if (difficulty == null) return;   // null in Sandbox / outside Career
+            difficulty.MissingCrewsRespawn = true;
+            difficulty.AutoHireCrews = true;
         }
 
         private void ApplyBuildingLevels()
