@@ -36,7 +36,7 @@ namespace KSPArchipelago.Contracts.Primitives
             CelestialBody body = FlightGlobals.GetBodyByName(bodyName);
             if (body == null)
                 throw new FormatException($"sample_return primitive: unknown body '{bodyName}'");
-            return new CollectScience(body, BodyLocation.Surface);
+            return new KSPArchipelago.Contracts.Parameters.RecoveredSurfaceSampleParameter(bodyName);
         }
     }
 }
