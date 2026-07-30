@@ -6,7 +6,7 @@ using UnityEngine;
 namespace KSPArchipelago.Contracts.Parameters
 {
     /// <summary>
-    /// Completes when a recovered (not transmitted) surface SAMPLE for the
+    /// Completes when a recovered (not transmitted) surface sample for a
     /// specified body appears on a recovered vessel. Mirrors MissionTracker's
     /// surface-sample detection which inspects ScienceData subjectIDs of
     /// ModuleScienceExperiment/ModuleScienceContainer entries.

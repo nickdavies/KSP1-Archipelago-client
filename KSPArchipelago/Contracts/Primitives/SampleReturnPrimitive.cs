@@ -6,18 +6,9 @@ using Newtonsoft.Json.Linq;
 namespace KSPArchipelago.Contracts.Primitives
 {
     /// <summary>
-    /// <c>{ "kind": "sample_return", "body": "Mun" }</c>
-    ///
-    /// Maps to stock <see cref="CollectScience"/> bound to the body's SURFACE:
-    /// completes when surface science from <c>body</c> is received (recovered or
-    /// transmitted) — the surface-sample-return mission satisfies it on recovery.
-    /// Self-tracks via GameEvents.OnScienceRecieved; no host entity required.
-    ///
-    /// Note: stock CollectScience(Surface) fires on any surface science from the
-    /// body, which is slightly looser than "a surface SAMPLE specifically" — an
-    /// acceptable out-of-logic easing (the contract item + physics gates still
-    /// apply). If strict sample-only is wanted later, a custom recover param
-    /// mirroring MissionTracker's surfaceSample detection is the upgrade.
+    /// Maps to a recovered-surface-sample requirement for the specified body.
+    /// Implemented by RecoveredSurfaceSampleParameter, which mirrors MissionTracker's surface-sample detection.
+    /// No host entity is required.
     /// </summary>
     public sealed class SampleReturnPrimitive : ContractPrimitiveBase<string>
     {
