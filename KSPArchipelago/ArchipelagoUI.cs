@@ -197,6 +197,24 @@ namespace KSPArchipelago
                 }
             }
 
+            // Contract progress. Outside the goal block on purpose: goal_contract_mode
+            // defaults to `count`, so the goal contract items are gated behind a
+            // contract count in nearly every seed regardless of what the goal itself is.
+            // That count can be rolled randomly at generation time, so this line is the
+            // player's only way to see it.
+            int contractsTotal = mod.ContractsTotal;
+            if (contractsTotal > 0)
+            {
+                int contractsDone = mod.ContractsCompleted;
+                int contractsReq = mod.ContractsRequired;
+                GUILayout.Space(4);
+                // contractsReq is 0 under findable / starting, where contracts exist
+                // but gate nothing — show plain progress rather than "/ 0 required".
+                GUILayout.Label(contractsReq > 0
+                    ? $"Contracts: {contractsDone} / {contractsReq} required  ({contractsTotal} in seed)"
+                    : $"Contracts: {contractsDone} / {contractsTotal} completed");
+            }
+
             GUILayout.Space(8);
             if (GUILayout.Button("Re-award All Items"))
             {

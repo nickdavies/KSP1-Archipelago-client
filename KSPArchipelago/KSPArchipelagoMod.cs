@@ -366,7 +366,6 @@ namespace KSPArchipelago
         private volatile bool _thresholdsDirty = false;
 
         // Slot data from AP server.
-        public int Goal { get; private set; }
         public int Difficulty { get; private set; }
         public int TechSlotsPerNode { get; private set; }
 
@@ -442,6 +441,16 @@ namespace KSPArchipelago
         public int GoalLocationsChecked => missionTracker?.GoalLocationsChecked ?? 0;
         public List<KeyValuePair<string, bool>> GetGoalStatus()
             => missionTracker?.GetGoalStatus() ?? new List<KeyValuePair<string, bool>>();
+
+        // Contract progress, for the UI panel. The goal contract item(s) are
+        // released once ContractsCompleted reaches ContractsRequired; that gate is
+        // rolled at generation time (contracts_required_for_goal supports AP's
+        // random-range syntax), so the player has no other way to learn the number.
+        private int _contractsRequired;
+        public int ContractsRequired => _contractsRequired;
+        public int ContractsTotal => Contracts.ApContractManager.NonGoalCount;
+        public int ContractsCompleted
+            => Contracts.ApContractManager.CountCompleted(missionTracker);
 
         public void IncrementRDLevel()
         {
@@ -1017,7 +1026,6 @@ namespace KSPArchipelago
                 // --- Validate required slot_data keys up front ---
                 var missing = new List<string>();
 
-                Goal = sd.TryGetValue("goal", out object goalObj) ? Convert.ToInt32(goalObj) : 0;
                 Difficulty = sd.TryGetValue("difficulty", out object diffObj) ? Convert.ToInt32(diffObj) : -1;
                 if (Difficulty < 0) missing.Add("difficulty");
                 // Optional: DeathLink. Absent on old seeds -> off. Not a required key.
@@ -1174,7 +1182,14 @@ namespace KSPArchipelago
                     // Absent in findable / starting -> no-op.
                     var thresholdsTok = sd.TryGetValue("contract_thresholds", out object tObj)
                         ? tObj as Newtonsoft.Json.Linq.JToken : null;
-                    Contracts.ContractThresholdWatcher.Configure(thresholdsTok, contractSpecs);
+                    Contracts.ContractThresholdWatcher.Configure(thresholdsTok);
+
+                    // Completed non-goal contracts needed to release the goal
+                    // contract item(s); 0 under findable / starting. Read leniently
+                    // (absent -> 0): it only drives a status label, so a missing
+                    // value must never cost a player access to their save.
+                    _contractsRequired = sd.TryGetValue("contracts_required", out object crObj)
+                        ? Convert.ToInt32(crObj) : 0;
                 }
                 catch (Exception ex)
                 {

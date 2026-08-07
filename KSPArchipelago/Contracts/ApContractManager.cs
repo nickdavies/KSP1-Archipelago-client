@@ -71,6 +71,36 @@ namespace KSPArchipelago.Contracts
 
         public static int SpecCount => _specs.Count;
 
+        /// <summary>Ordinary (non-goal) contracts in this seed.</summary>
+        public static int NonGoalCount
+        {
+            get
+            {
+                int n = 0;
+                foreach (ContractSlotSpec s in _specs)
+                    if (!s.IsGoal) n++;
+                return n;
+            }
+        }
+
+        /// <summary>
+        /// Completed ordinary contracts, counted by primary reward slot — both slots of a
+        /// contract check together, so counting the primary counts it exactly once. This is
+        /// the same number the goal-item thresholds are measured against, so a UI showing it
+        /// can never disagree with the gate (including after !collect or offline progress).
+        ///
+        /// Takes the tracker rather than using <see cref="IsApLocationChecked"/>: that helper
+        /// does a FindObjectOfType per call, which would be a scene scan per contract.
+        /// </summary>
+        public static int CountCompleted(MissionTracker tracker)
+        {
+            if (tracker == null) return 0;
+            int n = 0;
+            foreach (ContractSlotSpec s in _specs)
+                if (!s.IsGoal && tracker.IsLocationChecked(s.Location)) n++;
+            return n;
+        }
+
         public static bool IsContractItem(string itemName)
             => itemName != null && _byItem.ContainsKey(itemName);
 

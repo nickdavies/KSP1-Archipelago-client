@@ -14,11 +14,13 @@ namespace KSPArchipelago.Contracts
     /// <code>{ "8": ["Contract Threshold 1", ...] }  // report these once 8 done</code>
     ///
     /// Players complete contracts in any order while the generator only reasons
-    /// about the COUNT, so the client mirrors that: it counts its own completed
-    /// non-goal contracts (by primary reward slot) and reports every threshold
-    /// whose count has been reached. Reporting releases the locked goal item
-    /// through the normal AP channel, after which the existing item-gated offer
-    /// machinery (<see cref="ApContractManager"/>) offers the goal contract.
+    /// about the COUNT, so the client mirrors that: it asks
+    /// <see cref="ApContractManager.CountCompleted"/> how many non-goal contracts
+    /// are done and reports every threshold whose count has been reached — the
+    /// same count the UI shows, so the two can never disagree. Reporting releases
+    /// the locked goal item through the normal AP channel, after which the existing
+    /// item-gated offer machinery (<see cref="ApContractManager"/>) offers the goal
+    /// contract.
     ///
     /// <see cref="ReportLocation"/> is idempotent, so re-evaluating every tick is
     /// safe; this also makes offline progress, reconnects, and server-side
@@ -33,20 +35,16 @@ namespace KSPArchipelago.Contracts
         }
 
         private static readonly List<Threshold> _thresholds = new List<Threshold>();
-        // Primary reward slot of each non-goal contract — both slots of a
-        // contract check together, so we count by the primary to count once.
-        private static readonly List<string> _nonGoalPrimaries = new List<string>();
 
         /// <summary>
         /// Configure from slot_data on connect. <paramref name="thresholdsTok"/>
-        /// is the <c>contract_thresholds</c> map (count -> [location names]);
-        /// <paramref name="specs"/> is the contract manifest (to enumerate the
-        /// non-goal primaries). Either being empty disables the watcher.
+        /// is the <c>contract_thresholds</c> map (count -> [location names]).
+        /// An empty map disables the watcher. The completed-contract count comes
+        /// from <see cref="ApContractManager"/>, which already owns the manifest.
         /// </summary>
-        public static void Configure(JToken thresholdsTok, IEnumerable<ContractSlotSpec> specs)
+        public static void Configure(JToken thresholdsTok)
         {
             _thresholds.Clear();
-            _nonGoalPrimaries.Clear();
 
             if (thresholdsTok is JObject jo)
             {
@@ -67,14 +65,8 @@ namespace KSPArchipelago.Contracts
                 }
             }
 
-            if (specs != null)
-            {
-                foreach (ContractSlotSpec s in specs)
-                    if (!s.IsGoal) _nonGoalPrimaries.Add(s.Location);
-            }
-
             Debug.Log($"[KSP-AP] ContractThresholdWatcher: {_thresholds.Count} "
-                    + $"threshold group(s), {_nonGoalPrimaries.Count} non-goal contract(s)");
+                    + $"threshold group(s), {ApContractManager.NonGoalCount} non-goal contract(s)");
         }
 
         /// <summary>
@@ -86,9 +78,7 @@ namespace KSPArchipelago.Contracts
         {
             if (tracker == null || _thresholds.Count == 0) return;
 
-            int completed = 0;
-            foreach (string primary in _nonGoalPrimaries)
-                if (tracker.IsLocationChecked(primary)) completed++;
+            int completed = ApContractManager.CountCompleted(tracker);
 
             foreach (Threshold th in _thresholds)
             {
