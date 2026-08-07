@@ -11,6 +11,11 @@ namespace KSPArchipelago.Traps.Actuators
     /// uncrewed probe with no link loses control input — that's CommNet.
     /// In a save with CommNet disabled the trap fires as a harmless crackle
     /// (consumed — it must never clog the queue waiting for a setting).
+    ///
+    /// Overlapping copies COALESCE into one longer blackout. They must not
+    /// nest: a second effect would capture the already-zeroed antennaPower as
+    /// its "original", and whichever finished last would restore 0.0 —
+    /// permanently dead antennas.
     /// </summary>
     internal sealed class RadioSilenceTrap : ITrapActuator
     {
@@ -33,7 +38,18 @@ namespace KSPArchipelago.Traps.Actuators
                 return;
             }
 
-            runner.Add(new SilenceEffect(v, Random.Range(30f, 90f)));
+            float duration = Random.Range(30f, 90f);
+            SilenceEffect live = SilenceEffect.Live;
+            if (live != null && live.Covers(v))
+            {
+                live.Extend(duration);
+                Debug.Log($"[KSP-AP] Radio Silence coalesced into the live blackout ({duration:F0}s)");
+            }
+            else
+            {
+                runner.Add(new SilenceEffect(v, duration));
+            }
+
             ScreenMessages.PostScreenMessage(
                 "<color=orange>TRAP:</color> Static floods every frequency!",
                 5f, ScreenMessageStyle.UPPER_CENTER);
@@ -41,12 +57,27 @@ namespace KSPArchipelago.Traps.Actuators
 
         private sealed class SilenceEffect : ITrapEffect
         {
+            /// <summary>The one live blackout, or null. Set in the ctor, cleared
+            /// by Restore — every path out of the effect goes through Restore.</summary>
+            internal static SilenceEffect Live;
+
             private readonly Vessel _vessel;
             private readonly List<KeyValuePair<ModuleDataTransmitter, double>> _saved;
             private float _remaining;
 
+            /// <summary>Only coalesce onto the vessel this blackout actually
+            /// holds — a different craft has a disjoint antenna set, so a second
+            /// effect there is safe.</summary>
+            internal bool Covers(Vessel v) => _vessel == v;
+
+            /// <summary>Absorb an overlapping copy: the blackout lasts as long as
+            /// the longer of the two, and the antennas are only saved once.</summary>
+            internal void Extend(float duration)
+                => _remaining = Mathf.Max(_remaining, duration);
+
             public SilenceEffect(Vessel vessel, float duration)
             {
+                Live = this;
                 _vessel = vessel;
                 _remaining = duration;
                 _saved = new List<KeyValuePair<ModuleDataTransmitter, double>>();
@@ -84,6 +115,7 @@ namespace KSPArchipelago.Traps.Actuators
                     if (entry.Key != null)
                         entry.Key.antennaPower = entry.Value;
                 _saved.Clear();
+                if (Live == this) Live = null;
             }
         }
     }

@@ -9,6 +9,12 @@ namespace KSPArchipelago.Traps.Actuators
     /// if the manual stage lock (Alt+L) is engaged when the timer hits
     /// zero, the lock wins and the trap is spent — hammering the lock key
     /// in time IS the minigame.
+    ///
+    /// Does NOT stack. A copy that lands while a countdown is already running
+    /// is swallowed: two concurrent fuses garble each other's count and stage
+    /// twice, which is too deadly to be fun. The swallowed copy is still
+    /// consumed (it never comes back), and two in a row are still possible
+    /// once a countdown has ended.
     /// </summary>
     internal sealed class StageFrightTrap : ITrapActuator
     {
@@ -21,11 +27,24 @@ namespace KSPArchipelago.Traps.Actuators
 
         public void Fire(MonoBehaviour host, Vessel v, TrapEffectsRunner runner)
         {
+            if (CountdownEffect.Live != null)
+            {
+                // Silent on screen: the red count already owns the moment and a
+                // second message during it just reads as a bug. FireNow still
+                // logs the fire and posts the message-tray record, so the copy
+                // is visibly received and spent.
+                Debug.Log("[KSP-AP] Stage Fright swallowed — a countdown is already running");
+                return;
+            }
             runner.Add(new CountdownEffect(v));
         }
 
         private sealed class CountdownEffect : ITrapEffect
         {
+            /// <summary>The one live countdown, or null. Set in the ctor, cleared
+            /// by Finish — every path out of the effect goes through Finish.</summary>
+            internal static CountdownEffect Live;
+
             private readonly Vessel _vessel;
             private float _remaining = 15f;
             private int _lastPosted = int.MaxValue;
@@ -35,6 +54,7 @@ namespace KSPArchipelago.Traps.Actuators
 
             public CountdownEffect(Vessel vessel)
             {
+                Live = this;
                 _vessel = vessel;
             }
 
@@ -43,7 +63,7 @@ namespace KSPArchipelago.Traps.Actuators
                 if (_vessel == null || !_vessel.loaded || _vessel.packed
                     || FlightGlobals.ActiveVessel != _vessel)
                 {
-                    ClearMessage();
+                    Finish();
                     return false;   // vessel changed mid-countdown — silent fizzle
                 }
 
@@ -60,7 +80,7 @@ namespace KSPArchipelago.Traps.Actuators
 
                 _remaining -= fixedDeltaTime;
                 if (_remaining > 0f) return true;
-                ClearMessage();
+                Finish();
 
                 if (FlightInputHandler.fetch != null && FlightInputHandler.fetch.stageLock)
                     ScreenMessages.PostScreenMessage(
@@ -74,7 +94,16 @@ namespace KSPArchipelago.Traps.Actuators
             // A scene change mid-countdown kills the timer; the trap was
             // already consumed at Fire — reverting to dodge it is the same
             // escape hatch every trap has.
-            public void Abort() => ClearMessage();
+            public void Abort() => Finish();
+
+            /// <summary>The single exit. Releases the no-stack claim so the next
+            /// Stage Fright can arm — distinct from ClearMessage, which also runs
+            /// each second mid-countdown to swap the live message.</summary>
+            private void Finish()
+            {
+                ClearMessage();
+                if (Live == this) Live = null;
+            }
 
             private void ClearMessage()
             {
