@@ -45,7 +45,7 @@ namespace KSPArchipelago.Contracts.Primitives
             return new VesselSystemsParameter(
                 new List<string> { p.System },
                 new List<string> { moduleDesc },
-                "Ensure that the vessel has",
+                "vessel has",
                 MannedStatus.ANY,
                 false);
         }
