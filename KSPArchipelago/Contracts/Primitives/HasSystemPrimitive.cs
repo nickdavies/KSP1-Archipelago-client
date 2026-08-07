@@ -35,12 +35,17 @@ namespace KSPArchipelago.Contracts.Primitives
 
         protected override ContractParameter BuildFrom(Spec p)
         {
-            // ctor: (checkModuleTypes, checkModuleDescriptions, vesselDescription,
-            //        mannedStatus, requireNew)
+        // ctor: (checkModuleTypes, checkModuleDescriptions, vesselDescription,
+        //        mannedStatus, requireNew)
+            // Minimal grammar tweak: add the indefinite article for science lab
+            string label = p.Label ?? "";
+            string moduleDesc = string.Equals(label, "science lab", StringComparison.OrdinalIgnoreCase)
+                ? "a " + label
+                : label;
             return new VesselSystemsParameter(
                 new List<string> { p.System },
-                new List<string> { p.Label },
-                p.Label,
+                new List<string> { moduleDesc },
+                "vessel has",
                 MannedStatus.ANY,
                 false);
         }
