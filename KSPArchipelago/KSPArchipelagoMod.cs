@@ -60,6 +60,24 @@ namespace KSPArchipelago
             if (Traps.TrapManager.IsTrapItem(itemName) || (flags & ItemFlags.Trap) != 0)
                 return;
 
+            // Buff items: count here, exactly like Progressive Launch Pad below.
+            // Unlike traps this IS safe in the EDITOR replay path — the count is
+            // zeroed by ResetProgressiveState before any full re-walk, and the
+            // effect is applied as an absolute (stock * total) rather than an
+            // increment, so replaying can't compound. The actual field writes
+            // happen on the main thread in Update() via BuffManager.Apply.
+            if (Buffs.BuffManager.IsBuffItem(itemName))
+            {
+                Buffs.BuffManager.NoteReceived(itemName);
+                if (showToast)
+                {
+                    toastText = $"AP: Received {itemName} — permanent, stacks";
+                    ScreenMessages.PostScreenMessage(toastText, 5f, ScreenMessageStyle.UPPER_CENTER);
+                    PostToMessageSystem(senderName, locationName, toastText);
+                }
+                return;
+            }
+
             // Science packs: toast only. R&D award and TotalApScienceAwarded are
             // written together by the caller (ProcessAllItems / ProcessNewItems) so
             // all three happen at once and can't desync
@@ -518,6 +536,13 @@ namespace KSPArchipelago
 
             GameEvents.onGameStateLoad.Add(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
             GameEvents.onGameSceneLoadRequested.Add(OnSceneChange);
+            // Buffs: a vessel that was packed when Apply() last ran still has
+            // stock values on its parts, so re-apply as it comes off rails.
+            // Registered here rather than in MissionTracker because that block
+            // is the location-check surface, not a general vessel-lifecycle
+            // one, and because TrapManager's poll only ever sees ActiveVessel
+            // (it would miss a station you just rendezvoused with).
+            GameEvents.onVesselGoOffRails.Add(Buffs.BuffManager.OnVesselGoOffRails);
             GameEvents.onLevelWasLoadedGUIReady.Add(OnLevelLoadedGUIReady);
             GameEvents.Contract.onContractsLoaded.Add(OnContractsLoaded);
             // A cancelled/declined AP contract is still owed — re-offer it.
@@ -794,6 +819,13 @@ namespace KSPArchipelago
                     PushFiredTraps(localOnly);
             }
 
+            // Push buff totals into prefabs + loaded vessels. Deferred to the
+            // main thread here because item receipt can land on a ThreadPool
+            // worker (HandleConnect), and PartLoader/FlightGlobals are not
+            // thread-safe. Idempotent, so a spurious extra Apply is harmless.
+            if (Buffs.BuffManager.NeedsApply)
+                Buffs.BuffManager.Apply();
+
             // Fire owed traps (flight scene only; gates + pacing inside).
             Traps.TrapManager.Drain(this);
 
@@ -830,6 +862,9 @@ namespace KSPArchipelago
         {
             RDLevel = 0;
             _progressiveCounts = new Dictionary<string, int>();
+            // Buff counts are progressive state too — same double-count
+            // hazard described below if they aren't zeroed before the re-walk.
+            Buffs.BuffManager.ResetCounts();
             // Career-mode facility levels are progressive state too. If we
             // don't zero them here, ProcessAllItems re-walking
             // AllItemsReceived (called on _needsReset from VAB entry/exit
@@ -1420,6 +1455,9 @@ namespace KSPArchipelago
                 // disconnect/quit returns to vanilla KSP science economy.
                 // ScienceScaling.Reset is a no-op if no snapshot was taken.
                 ScienceScaling.Reset();
+                // Buff prefab mutation is process-global, not save state — it
+                // would bleed into the next save opened this session.
+                Buffs.BuffManager.Restore();
                 // Reveal any hidden bodies on the main thread (see _bodyResetPending)
                 // so a disconnect/quit returns to a fully-visible solar system.
                 _bodyResetPending = true;
@@ -1526,6 +1564,7 @@ namespace KSPArchipelago
 
         public void OnDestroy()
         {
+            GameEvents.onVesselGoOffRails.Remove(Buffs.BuffManager.OnVesselGoOffRails);
             GameEvents.onGameStateLoad.Remove(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
             GameEvents.onGameSceneLoadRequested.Remove(OnSceneChange);
             GameEvents.onLevelWasLoadedGUIReady.Remove(OnLevelLoadedGUIReady);

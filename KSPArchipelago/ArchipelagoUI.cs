@@ -215,6 +215,20 @@ namespace KSPArchipelago
                     : $"Contracts: {contractsDone} / {contractsTotal} completed");
             }
 
+            // Active buff totals. Load-bearing rather than decorative: buffs are
+            // applied to part prefabs at runtime and are NOT stored in the .craft
+            // or the save, so a player who loses them (disconnect, a restore that
+            // rewinds item receipts) otherwise flies a silently weaker rocket with
+            // no way to tell. This line is the only place the current stack shows.
+            var buffRows = Buffs.BuffManager.DisplayTotals();
+            if (buffRows.Count > 0)
+            {
+                GUILayout.Space(4);
+                GUILayout.Label("Active buffs:");
+                foreach (var row in buffRows)
+                    GUILayout.Label($"   {row.Key}  +{row.Value:0.##}%");
+            }
+
             GUILayout.Space(8);
             if (GUILayout.Button("Re-award All Items"))
             {
