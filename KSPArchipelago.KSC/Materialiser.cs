@@ -188,6 +188,16 @@ namespace KSPArchipelago.KSC
             string kspHome = Planetarium.fetch?.Home?.name ?? "<null>";
             bool planetariumAlreadyCorrect = (kspHome == newHome.name);
 
+            // Invalidate FlightGlobals's home-body cache on every call, even
+            // when the flags already read correctly.  GetHomeBody() and
+            // GetHomeBodyName() lazily scan isHomeWorld once and stash the
+            // result in fetch.homeBody, and FlightGlobals is persistent, so a
+            // Kerbin reference cached before the flip would otherwise survive
+            // every later scene load.  Consumers include the tracking
+            // station's home-body camera target (MapView.Start), R&D's
+            // trip-log situations, waypoint defaults and the comet spawner.
+            ClearFlightGlobalsHomeCache();
+
             if (alreadyCorrect && planetariumAlreadyCorrect)
             {
                 Debug.Log($"[KSPArchipelago.KSC] FlipHomeFlag: no-op — {newHome.name} already home " +
@@ -201,14 +211,6 @@ namespace KSPArchipelago.KSC
             }
             newHome.isHomeWorld = true;
             Planetarium.fetch.Home = newHome;
-
-            // Invalidate FlightGlobals's home-body cache.  GetHomeBody() and
-            // GetHomeBodyName() lazily scan isHomeWorld once and stash the
-            // result in fetch.homeBody — if KSP populated that cache before
-            // our flip, subsequent callers (keypress-reset, waypoint defaults,
-            // comet spawner labels, etc.) keep returning the stale Kerbin
-            // reference.
-            ClearFlightGlobalsHomeCache();
 
             Debug.Log($"[KSPArchipelago.KSC] Home flipped: {oldHome?.name ?? "<none>"} → {newHome.name} " +
                       $"(isHomeWorld_was_correct={alreadyCorrect}, " +

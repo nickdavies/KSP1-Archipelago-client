@@ -15,9 +15,8 @@ namespace KSPArchipelago
     ///    cycle. The scaled-space sphere still renders — the body is visible but
     ///    unlabelled and unselectable.
     ///
-    ///  * "deep" (applied only to deep-hidden bodies): additionally the PQS surface
-    ///    and the scaled-space MeshRenderer are disabled, so the body is fully
-    ///    invisible.
+    ///  * "deep" (applied only to deep-hidden bodies): additionally the scaled-space
+    ///    renderers are disabled, so the body is fully invisible.
     ///
     /// The hidden set (bodyName -> deep?) is static so it survives scene changes.
     /// KSP rebuilds map nodes and the Tab-target list per scene, and the scaled
@@ -43,6 +42,17 @@ namespace KSPArchipelago
         // cross-session recovery of fly-there reveals is a later (AP DataStorage)
         // refinement; item reveals already replay from AP received-items.
         private static readonly HashSet<string> _flownReveals = new HashSet<string>();
+
+        // Scaled-space components we switched off for a deep-hidden body, keyed by
+        // bodyName. Only these are switched back on at reveal, so anything a
+        // visual mod keeps disabled on purpose (e.g. Scatterer's replaced
+        // atmosphere shell) is left alone.
+        private sealed class ScaledHide
+        {
+            public readonly HashSet<Renderer> Renderers = new HashSet<Renderer>();
+            public readonly HashSet<Behaviour> Drivers = new HashSet<Behaviour>();
+        }
+        private static readonly Dictionary<string, ScaledHide> _scaledHidden = new Dictionary<string, ScaledHide>();
 
         // When true, undiscovered bodies may be flown to (arriving reveals them)
         // and hiding is shallow; when false, entering one destroys the craft and
@@ -281,21 +291,47 @@ namespace KSPArchipelago
             // you're close to a body, which never happens for a hidden one (BLOCK
             // destroys on SOI entry, ALLOW reveals on entry), and DeactivateSphere
             // throws an NRE on bodies whose PQS isn't active in the current scene.
-            SetScaledBodyActive(body, active: !(hidden && deep));
+            SetScaledBodyVisible(body, visible: !(hidden && deep));
         }
 
-        // Deep-hide deactivates the whole scaled-space GameObject, not just its
-        // MeshRenderer: KSP's ScaledSpaceFader re-enables the renderer by camera
-        // distance every frame, so mesh.enabled=false alone is clobbered and the
-        // body stays visible in map view / the tracking station. Deactivating the
-        // object also removes its atmosphere-shell child.
-        private static void SetScaledBodyActive(CelestialBody body, bool active)
+        // Deep-hide switches off the scaled-space renderers; it must NOT
+        // deactivate the GameObject. That object hosts the body's MapObject
+        // (ScaledMovement), and PlanetariumCamera parents its pivot — with the
+        // camera underneath — to the targeted MapObject's transform. Kerbin is
+        // the prefab initialTarget, targeted on every tracking-station load, so
+        // an inactive Kerbin took the whole camera rig inactive with it;
+        // SpaceTracking.Start's FindObjectOfType<PlanetariumCamera>() then
+        // returned null and threw before the Leave button was wired up.
+        //
+        // ScaledSpaceFader and AtmosphereFromGround rewrite Renderer.enabled
+        // every Update, so they are switched off together with the renderers.
+        // Re-asserting an already-hidden body only adds anything that has come
+        // back on since; reveal restores exactly the recorded set.
+        private static void SetScaledBodyVisible(CelestialBody body, bool visible)
         {
             try
             {
                 var scaled = body.scaledBody;
-                if (scaled != null && scaled.activeSelf != active)
-                    scaled.SetActive(active);
+                if (scaled == null) return;
+                if (visible)
+                {
+                    if (!_scaledHidden.TryGetValue(body.bodyName, out var record)) return;
+                    _scaledHidden.Remove(body.bodyName);
+                    foreach (var d in record.Drivers) if (d != null) d.enabled = true;
+                    foreach (var r in record.Renderers) if (r != null) r.enabled = true;
+                    return;
+                }
+                if (!_scaledHidden.TryGetValue(body.bodyName, out var hide))
+                {
+                    hide = new ScaledHide();
+                    _scaledHidden[body.bodyName] = hide;
+                }
+                foreach (var f in scaled.GetComponentsInChildren<ScaledSpaceFader>(true))
+                    if (f.enabled) { f.enabled = false; hide.Drivers.Add(f); }
+                foreach (var a in scaled.GetComponentsInChildren<AtmosphereFromGround>(true))
+                    if (a.enabled) { a.enabled = false; hide.Drivers.Add(a); }
+                foreach (var r in scaled.GetComponentsInChildren<Renderer>(true))
+                    if (r.enabled) { r.enabled = false; hide.Renderers.Add(r); }
             }
             catch (Exception e) { Debug.LogWarning($"[KSP-AP] scaled body toggle failed for {body.bodyName}: {e.Message}"); }
         }
