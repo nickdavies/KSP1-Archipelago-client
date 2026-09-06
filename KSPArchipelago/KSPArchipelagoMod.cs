@@ -197,12 +197,26 @@ namespace KSPArchipelago
             MessageSystem.Instance.AddMessage(msg);
         }
 
+        /// <summary>
+        /// Tech nodes are AP check locations, never gates, so no capability may
+        /// hang off R&D state. Every part is moved to an unreachable node and
+        /// granted as experimental instead. Stock's radial decouplers (TT-38K,
+        /// TT-70, HDM) additionally hide their crossfeed toggle until the Fuel
+        /// Systems node is researched (ModuleToggleCrossfeed.techRequired). That
+        /// is the only module-level tech gate in stock, and the world's onion
+        /// staging model assumes the toggle is open. Blank it on the prefab so the
+        /// editor toggle always shows; the toggle itself stays default-off as in
+        /// stock, so the player still enables crossfeed per decoupler.
+        /// </summary>
         public static void ScrubTechTree()
         {
             foreach (AvailablePart part in PartLoader.LoadedPartsList)
             {
                 if (part.TechRequired != "inaccessable")
                     part.TechRequired = "inaccessable";
+                if (part.partPrefab == null) continue;
+                foreach (ModuleToggleCrossfeed xf in part.partPrefab.FindModulesImplementing<ModuleToggleCrossfeed>())
+                    xf.techRequired = "";
             }
         }
 
