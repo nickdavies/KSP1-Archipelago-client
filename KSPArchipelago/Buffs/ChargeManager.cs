@@ -136,6 +136,8 @@ namespace KSPArchipelago.Buffs
 
             if (!changed)
             {
+                Debug.Log($"[KSP-AP] Refuel no-op ({summary}); charge NOT spent, "
+                          + $"{Available} still held");
                 ScreenMessages.PostScreenMessage(
                     $"AP: nothing to refuel ({summary}) — charge not spent",
                     5f, ScreenMessageStyle.UPPER_CENTER);

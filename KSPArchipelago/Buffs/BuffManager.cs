@@ -47,6 +47,10 @@ namespace KSPArchipelago.Buffs
 
         private static bool _applied;
 
+        /// <summary>Totals as of the last Apply, so derived work (tooltip
+        /// rebuild, probe logging) can be skipped when nothing moved.</summary>
+        private static string _lastAppliedTotals;
+
         /// <summary>Set when counts change; drained on the main thread.</summary>
         public static bool NeedsApply { get; private set; }
 
@@ -63,12 +67,10 @@ namespace KSPArchipelago.Buffs
         /// </summary>
         public static void NoteReceived(string itemName)
         {
-            if (!IsBuffItem(itemName))
-            {
-                if (itemName != null && itemName.StartsWith("Buff: "))
-                    Debug.Log($"[KSP-AP] Buffs: unknown buff '{itemName}' ignored — update the client mod");
-                return;
-            }
+            // Callers gate on IsBuffItem; this is a defensive no-op. Reporting
+            // an unrecognised "Buff: ..." name is GiveItem's job, where it is
+            // actually reachable.
+            if (!IsBuffItem(itemName)) return;
             int c;
             _counts.TryGetValue(itemName, out c);
             _counts[itemName] = c + 1;
@@ -122,6 +124,15 @@ namespace KSPArchipelago.Buffs
             if (PartLoader.LoadedPartsList == null) return;
 
             BuffTotals totals = Totals();
+            string describe = DescribeTotals();
+            // Apply() re-runs on every scene change (ResetProgressiveState
+            // marks the counts dirty), but the derived work below only has to
+            // happen when the held totals actually move. Field writes stay
+            // unconditional -- they are cheap assignments and must not be
+            // skipped -- while rebuilding tooltip strings calls GetInfo() on
+            // every prefab, which is not something to repeat per scene load.
+            bool totalsChanged = describe != _lastAppliedTotals;
+
             int prefabs = 0;
             foreach (AvailablePart ap in PartLoader.LoadedPartsList)
             {
@@ -130,7 +141,7 @@ namespace KSPArchipelago.Buffs
                 // Cached VAB tooltip strings don't track field writes — see
                 // TooltipRefresher. Without this the player sees stock gimbal
                 // range and generator output forever.
-                TooltipRefresher.Refresh(ap, ap.partPrefab);
+                if (totalsChanged) TooltipRefresher.Refresh(ap, ap.partPrefab);
                 prefabs++;
             }
 
@@ -145,8 +156,12 @@ namespace KSPArchipelago.Buffs
             }
 
             _applied = true;
+            _lastAppliedTotals = describe;
             Debug.Log($"[KSP-AP] Buffs: applied to {prefabs} prefabs, {liveParts} live parts "
-                      + $"({DescribeTotals()})");
+                      + $"({describe})");
+            // The line above only proves intent. This proves the writes landed
+            // on real parts -- a dead write logs identically without it.
+            if (totals.Any && totalsChanged) BuffProbe.LogSample();
         }
 
         /// <summary>
@@ -211,6 +226,7 @@ namespace KSPArchipelago.Buffs
                 _applicators[i].Reset();
             _applied = false;
             NeedsApply = false;
+            _lastAppliedTotals = null;
         }
 
         private static string DescribeTotals()

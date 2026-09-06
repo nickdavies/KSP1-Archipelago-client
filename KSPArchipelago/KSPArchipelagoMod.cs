@@ -60,12 +60,6 @@ namespace KSPArchipelago
             if (Traps.TrapManager.IsTrapItem(itemName) || (flags & ItemFlags.Trap) != 0)
                 return;
 
-            // Buff items: count here, exactly like Progressive Launch Pad below.
-            // Unlike traps this IS safe in the EDITOR replay path — the count is
-            // zeroed by ResetProgressiveState before any full re-walk, and the
-            // effect is applied as an absolute (stock * total) rather than an
-            // increment, so replaying can't compound. The actual field writes
-            // happen on the main thread in Update() via BuffManager.Apply.
             // Consumable buffs: banked as a charge, spent later from the mod
             // menu. Recognised here so it stays out of the part-lookup
             // fallthrough; the index-keyed bookkeeping happens at the awarded
@@ -82,6 +76,12 @@ namespace KSPArchipelago
                 return;
             }
 
+            // Permanent buffs: count here, exactly like Progressive Launch Pad
+            // below. Unlike traps this IS safe in the EDITOR replay path — the
+            // count is zeroed by ResetProgressiveState before any full re-walk,
+            // and the effect is applied as an absolute (stock * total) rather
+            // than an increment, so replaying can't compound. The field writes
+            // happen on the main thread in Update() via BuffManager.Apply.
             if (Buffs.BuffManager.IsBuffItem(itemName))
             {
                 Buffs.BuffManager.NoteReceived(itemName);
@@ -91,6 +91,21 @@ namespace KSPArchipelago
                     ScreenMessages.PostScreenMessage(toastText, 5f, ScreenMessageStyle.UPPER_CENTER);
                     PostToMessageSystem(senderName, locationName, toastText);
                 }
+                return;
+            }
+
+            // A "Buff: ..." name this build does not know comes from a newer
+            // server. Swallow it with a clear message rather than letting it
+            // reach the part-lookup fallthrough, which would report it as a
+            // missing part. Same contract as an unknown trap name.
+            if (itemName.StartsWith("Buff: "))
+            {
+                Debug.LogWarning($"[KSP-AP] Unknown buff item '{itemName}' ignored "
+                                 + "— update the client mod");
+                if (showToast)
+                    ScreenMessages.PostScreenMessage(
+                        $"AP: Unknown buff '{itemName}' — update the client mod",
+                        8f, ScreenMessageStyle.UPPER_CENTER);
                 return;
             }
 

@@ -33,6 +33,8 @@ namespace KSPArchipelago.Buffs
     /// </remarks>
     public static class TooltipRefresher
     {
+        private const string EC = "ElectricCharge";
+
         /// <summary>Regenerate cached module info for one buffed prefab.</summary>
         public static void Refresh(AvailablePart availablePart, Part prefab)
         {
@@ -50,6 +52,7 @@ namespace KSPArchipelago.Buffs
 
                 string title;
                 string info;
+                string primary = null;
                 try
                 {
                     IModuleInfo asInfo = module as IModuleInfo;
@@ -57,6 +60,12 @@ namespace KSPArchipelago.Buffs
                     {
                         title = asInfo.GetModuleTitle();
                         info = asInfo.GetInfo();
+                        // PartLoader caches this separately from info, and it is
+                        // what the part-list summary shows. For an engine it is
+                        // GetInfoThrust(), so leaving it stale makes the summary
+                        // read stock thrust while the expanded module block reads
+                        // the buffed value.
+                        primary = asInfo.GetPrimaryField();
                     }
                     else
                     {
@@ -82,6 +91,7 @@ namespace KSPArchipelago.Buffs
                     if (claimed.Contains(i)) continue;
                     if (availablePart.moduleInfos[i].moduleName != title) continue;
                     availablePart.moduleInfos[i].info = info;
+                    if (primary != null) availablePart.moduleInfos[i].primaryInfo = primary;
                     claimed.Add(i);
                     break;
                 }
@@ -89,18 +99,40 @@ namespace KSPArchipelago.Buffs
         }
 
         /// <summary>
-        /// True for module types some applicator writes to. Keep in step with
-        /// the applicators — a type added there and missed here still works,
-        /// it just shows a stale tooltip.
+        /// True for modules some applicator writes to.
         /// </summary>
+        /// <remarks>
+        /// The power half deliberately tests the same PREDICATE PowerApplicator
+        /// uses -- "has an ElectricCharge output" -- rather than naming module
+        /// types. A hardcoded type list drifts: it originally listed solar
+        /// panels, generators and converters and silently missed
+        /// ModuleAlternator, so a buffed LV-N kept advertising its stock
+        /// alternator output. Matching on the output itself also covers modded
+        /// EC sources for free.
+        /// </remarks>
         private static bool Touches(PartModule module)
         {
-            return module is ModuleEngines            // Isp / thrust
-                || module is ModuleGimbal             // control
-                || module is ModuleReactionWheel      // control
-                || module is ModuleDeployableSolarPanel  // power
-                || module is ModuleGenerator          // power (RTG)
-                || module is BaseConverter;           // power (fuel cell)
+            if (module is ModuleEngines) return true;         // Isp / thrust
+            if (module is ModuleGimbal) return true;          // control
+            if (module is ModuleReactionWheel) return true;   // control
+
+            // Power path 1: anything emitting EC through resHandler --
+            // solar panels, RTGs, alternators, modded sources.
+            if (module.resHandler != null && module.resHandler.outputResources != null)
+            {
+                List<ModuleResource> outputs = module.resHandler.outputResources;
+                for (int i = 0; i < outputs.Count; i++)
+                    if (outputs[i] != null && outputs[i].name == EC) return true;
+            }
+
+            // Power path 2: converters (fuel cells) emit through outputList.
+            BaseConverter converter = module as BaseConverter;
+            if (converter != null && converter.outputList != null)
+            {
+                for (int i = 0; i < converter.outputList.Count; i++)
+                    if (converter.outputList[i].ResourceName == EC) return true;
+            }
+            return false;
         }
     }
 }
