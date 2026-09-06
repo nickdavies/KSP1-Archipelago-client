@@ -66,6 +66,22 @@ namespace KSPArchipelago
             // effect is applied as an absolute (stock * total) rather than an
             // increment, so replaying can't compound. The actual field writes
             // happen on the main thread in Update() via BuffManager.Apply.
+            // Consumable buffs: banked as a charge, spent later from the mod
+            // menu. Recognised here so it stays out of the part-lookup
+            // fallthrough; the index-keyed bookkeeping happens at the awarded
+            // sites (ProcessAllItems / ProcessNewItems), which is where the
+            // item index is actually known.
+            if (Buffs.ChargeManager.IsConsumableItem(itemName))
+            {
+                if (showToast)
+                {
+                    toastText = $"AP: Received {itemName} — spend it from the AP menu";
+                    ScreenMessages.PostScreenMessage(toastText, 6f, ScreenMessageStyle.UPPER_CENTER);
+                    PostToMessageSystem(senderName, locationName, toastText);
+                }
+                return;
+            }
+
             if (Buffs.BuffManager.IsBuffItem(itemName))
             {
                 Buffs.BuffManager.NoteReceived(itemName);
@@ -811,12 +827,13 @@ namespace KSPArchipelago
             // Server fired-trap set arrived — merge on the main thread before
             // any Drain can fire (IsLoaded stays false until this lands).
             // Indexes only the local file knew get pushed back up.
-            if (_pendingServerFiredTraps != null)
+            foreach (ReceivedIndexStore store in ReceivedIndexStore.All)
             {
-                int[] localOnly = Traps.FiredTrapStore.MergeServer(_pendingServerFiredTraps);
-                _pendingServerFiredTraps = null;
+                int[] pending = store.TakePendingServerIndices();
+                if (pending == null) continue;
+                int[] localOnly = store.MergeServer(pending);
                 if (localOnly.Length > 0)
-                    PushFiredTraps(localOnly);
+                    PushStoreIndices(store, localOnly);
             }
 
             // Push buff totals into prefabs + loaded vessels. Deferred to the
@@ -865,6 +882,10 @@ namespace KSPArchipelago
             // Buff counts are progressive state too — same double-count
             // hazard described below if they aren't zeroed before the re-walk.
             Buffs.BuffManager.ResetCounts();
+            // Consumable charges: only the RECEIVED side is rebuilt here. The
+            // spent side lives in ReceivedIndexStore.SpentCharges and must
+            // survive, or a reconnect would refund every spent charge.
+            Buffs.ChargeManager.ResetReceived();
             // Career-mode facility levels are progressive state too. If we
             // don't zero them here, ProcessAllItems re-walking
             // AllItemsReceived (called on _needsReset from VAB entry/exit
@@ -933,6 +954,13 @@ namespace KSPArchipelago
                     item.ItemName, item.Player?.Alias, item.LocationName,
                     showToast: !alreadyAwarded, flags: item.Flags);
 
+                // Deliberately OUTSIDE the !alreadyAwarded guard: this rebuilds
+                // the full received set that ResetProgressiveState just
+                // cleared, so it has to see every copy, not only new ones.
+                // Whether a copy was already SPENT is a separate question,
+                // answered by ReceivedIndexStore.SpentCharges.
+                Buffs.ChargeManager.NoteReceived(i, item.ItemName);
+
                 if (!alreadyAwarded && scenario != null)
                 {
                     awarded.Add(i);
@@ -987,6 +1015,11 @@ namespace KSPArchipelago
                 if (Contracts.ApContractManager.IsContractItem(item.ItemName))
                     MarkContractsDirty(ReconcileTrigger.ItemsReceived);
 
+                // Bank a consumable charge. Outside the !alreadyAwarded guard
+                // for the same reason as the full-replay path: this tracks
+                // copies received, not copies newly awarded.
+                Buffs.ChargeManager.NoteReceived(i, item.ItemName);
+
                 if (!alreadyAwarded)
                 {
                     awarded.Add(i);
@@ -1008,27 +1041,25 @@ namespace KSPArchipelago
         // Deferred error: set on background thread, shown by Update() on main thread.
         private volatile string _slotDataError = null;
 
-        // Server-side fired-trap set: written by the DataStorage GetAsync
-        // callback (websocket thread), merged into FiredTrapStore by Update().
-        private volatile int[] _pendingServerFiredTraps;
+        /// <summary>Append used-up received-item indexes to the server-side
+        /// record (Scope.Slot DataStorage — the authoritative once-ever set).
+        /// Works for any ReceivedIndexStore; the store owns its key.</summary>
+        public void PushStoreIndex(ReceivedIndexStore store, int itemIndex)
+            => PushStoreIndices(store, new[] { itemIndex });
 
-        /// <summary>Append fired trap indexes to the server-side record
-        /// (Scope.Slot DataStorage — the authoritative fire-once set).</summary>
-        public void PushFiredTrap(int itemIndex) => PushFiredTraps(new[] { itemIndex });
-
-        public void PushFiredTraps(int[] itemIndices)
+        public void PushStoreIndices(ReceivedIndexStore store, int[] itemIndices)
         {
             try
             {
                 if (session != null)
-                    session.DataStorage[Scope.Slot, "FiredTraps"] += itemIndices;
+                    session.DataStorage[Scope.Slot, store.ServerKey] += itemIndices;
             }
             catch (Exception ex)
             {
                 // Socket died mid-write: the local file still has the index,
-                // so the worst case is one extra fire on a machine without it.
+                // so the worst case is one extra use on a machine without it.
                 Debug.LogWarning(
-                    $"[KSP-AP] PushFiredTraps({itemIndices.Length}) failed: {ex.Message}");
+                    $"[KSP-AP] Push {store.ServerKey}({itemIndices.Length}) failed: {ex.Message}");
             }
         }
 
@@ -1367,31 +1398,34 @@ namespace KSPArchipelago
                 // career directives for the main-thread drain in Update().
                 _pendingCareerDirectives = careerDirectives;
 
-                // Fire-once-ever trap record. The AP server's DataStorage is
-                // the source of truth (survives client reinstalls and the
-                // deploy pipeline wiping PluginData — which really happened);
-                // the local file is a secondary cache covering fires whose
-                // server write was lost to a disconnect. Drain stays blocked
-                // until BOTH are in (FiredTrapStore.IsLoaded).
-                Traps.FiredTrapStore.Load(
-                    HighLogic.SaveFolder, newSession.RoomState?.Seed, slotName);
-                _pendingServerFiredTraps = null;
-                var firedTrapsElement =
-                    newSession.DataStorage[Scope.Slot, "FiredTraps"];
-                firedTrapsElement.Initialize(new int[0]);
-                firedTrapsElement.GetAsync<int[]>().ContinueWith(t =>
+                // Once-ever records: fired traps, and spent consumable-buff
+                // charges. The AP server's DataStorage is the source of truth
+                // (survives client reinstalls and the deploy pipeline wiping
+                // PluginData — which really happened); the local file is a
+                // secondary cache covering uses whose server write was lost to
+                // a disconnect. Consumption stays blocked until BOTH are in
+                // (store.IsLoaded).
+                foreach (ReceivedIndexStore store in ReceivedIndexStore.All)
                 {
-                    // Worker thread — publish for the main-thread drain.
-                    if (t.IsFaulted || t.IsCanceled)
+                    ReceivedIndexStore captured = store;
+                    captured.Load(
+                        HighLogic.SaveFolder, newSession.RoomState?.Seed, slotName);
+                    var element = newSession.DataStorage[Scope.Slot, captured.ServerKey];
+                    element.Initialize(new int[0]);
+                    element.GetAsync<int[]>().ContinueWith(t =>
                     {
-                        Debug.LogWarning("[KSP-AP] FiredTraps DataStorage read failed: "
-                            + t.Exception?.GetBaseException().Message);
-                        return;   // store stays un-synced; no trap can fire
-                    }
-                    // Guard against a stale continuation from a prior session.
-                    if (session == newSession)
-                        _pendingServerFiredTraps = t.Result ?? new int[0];
-                });
+                        // Worker thread — publish for the main-thread drain.
+                        if (t.IsFaulted || t.IsCanceled)
+                        {
+                            Debug.LogWarning($"[KSP-AP] {captured.ServerKey} DataStorage read "
+                                + "failed: " + t.Exception?.GetBaseException().Message);
+                            return;   // store stays un-synced; nothing may be consumed
+                        }
+                        // Guard against a stale continuation from a prior session.
+                        if (session == newSession)
+                            captured.PublishServerIndices(t.Result ?? new int[0]);
+                    });
+                }
 
                 // DeathLink: create the library service (it manages the "DeathLink"
                 // connection tag + Bounce send/receive) and subscribe to incoming

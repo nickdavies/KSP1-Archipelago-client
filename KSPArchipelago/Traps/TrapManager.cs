@@ -141,7 +141,7 @@ namespace KSPArchipelago.Traps
                 return;
             }
 
-            if (FiredTrapStore.Contains(itemIndex)) return;   // already suffered — never re-owed
+            if (ReceivedIndexStore.FiredTraps.Contains(itemIndex)) return;   // already suffered — never re-owed
 
             var scenario = ApScenarioModule.Instance;
             if (scenario == null) return;
@@ -173,7 +173,7 @@ namespace KSPArchipelago.Traps
             {
                 ResetFlightState();
                 if (scenario.PendingTraps.Count == 0) return;
-                if (!mod.IsConnected || !FiredTrapStore.IsLoaded) return;
+                if (!mod.IsConnected || !ReceivedIndexStore.FiredTraps.IsLoaded) return;
                 if (GamePaused()) return;
                 // Space Center / Tracking Station: both support time warp, so
                 // vessel-free traps (Time Slip) fire here instead of waiting
@@ -190,7 +190,7 @@ namespace KSPArchipelago.Traps
             Vessel v = FlightGlobals.ActiveVessel;
 
             if (scenario.PendingTraps.Count == 0) return;
-            if (!mod.IsConnected || !FiredTrapStore.IsLoaded) return;
+            if (!mod.IsConnected || !ReceivedIndexStore.FiredTraps.IsLoaded) return;
 
             // Never act while paused: TimeWarp.SetRate stomps the pause
             // menu's timeScale=0 and un-pauses the game. Timers keep running
@@ -297,7 +297,7 @@ namespace KSPArchipelago.Traps
             for (int i = 0; i < scenario.PendingTraps.Count; i++)
             {
                 PendingTrap pending = scenario.PendingTraps[i];
-                if (FiredTrapStore.Contains(pending.Index))
+                if (ReceivedIndexStore.FiredTraps.Contains(pending.Index))
                 {
                     // Stale: this save was written before a fire that already
                     // happened (fire-once-ever wins over save-tied pending).
@@ -323,7 +323,7 @@ namespace KSPArchipelago.Traps
         {
             foreach (PendingTrap pending in scenario.PendingTraps)
                 if (DeadlyTrapNames.Contains(pending.Name)
-                    && !FiredTrapStore.Contains(pending.Index)
+                    && !ReceivedIndexStore.FiredTraps.Contains(pending.Index)
                     && Registry.TryGetValue(pending.Name, out ITrapActuator actuator)
                     && (v != null || actuator.CanFireWithoutVessel)
                     && actuator.IsEligible(v))
@@ -359,8 +359,8 @@ namespace KSPArchipelago.Traps
             }
             finally
             {
-                FiredTrapStore.Record(pending.Index);
-                mod.PushFiredTrap(pending.Index);
+                ReceivedIndexStore.FiredTraps.Record(pending.Index);
+                mod.PushStoreIndex(ReceivedIndexStore.FiredTraps, pending.Index);
                 // Instant traps register no effect, so the fire itself has to
                 // count as activity — otherwise a run of them re-warns between
                 // each one.
@@ -418,7 +418,7 @@ namespace KSPArchipelago.Traps
             foreach (PendingTrap pending in scenario.PendingTraps)
                 if (Registry.TryGetValue(pending.Name, out ITrapActuator actuator)
                     && !actuator.ManagesWarpItself
-                    && !FiredTrapStore.Contains(pending.Index))
+                    && !ReceivedIndexStore.FiredTraps.Contains(pending.Index))
                     return true;
             return false;
         }

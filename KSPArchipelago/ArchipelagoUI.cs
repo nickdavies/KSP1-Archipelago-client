@@ -229,6 +229,27 @@ namespace KSPArchipelago
                     GUILayout.Label($"   {row.Key}  +{row.Value:0.##}%");
             }
 
+            // Consumable buff charges. The spend is player-driven on purpose —
+            // a forced refuel mid-descent adds mass and wrecks TWR margins, so
+            // the timing has to be the player's.
+            if (Buffs.ChargeManager.TotalReceived > 0)
+            {
+                GUILayout.Space(4);
+                int charges = Buffs.ChargeManager.Available;
+                string blocked = Buffs.ChargeManager.BlockedReason(mod);
+                GUILayout.Label($"Mid-Air Refuel charges: {charges}"
+                    + $"  ({Buffs.ChargeManager.TotalReceived} received)");
+                // Say WHY it can't be used rather than silently greying out.
+                GUI.enabled = blocked == null;
+                if (GUILayout.Button(blocked == null
+                        ? "Use Mid-Air Refuel"
+                        : $"Use Mid-Air Refuel  ({blocked})"))
+                {
+                    Buffs.ChargeManager.TrySpend(mod);
+                }
+                GUI.enabled = true;
+            }
+
             GUILayout.Space(8);
             if (GUILayout.Button("Re-award All Items"))
             {
