@@ -14,7 +14,7 @@ LOG             = $(HOME)/workspaces/ksp_ap/ksp_stdout_stderr.log
 # the v0.4.3 tag yields "0.4.3"; unstamped/untagged trees fall back to "dev".
 VERSION        ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))
 
-.PHONY: all compile compile-main compile-ksc stage install run clean deps
+.PHONY: all compile compile-main compile-ksc lint-gameevents stage install run clean deps
 
 all: stage
 
@@ -39,8 +39,13 @@ $(OUT_DIR)/ap_placeholders.cfg: scripts/generate_placeholders.py
 	mkdir -p $(OUT_DIR)
 	python3 $< $@
 
+# Refuse to build a static GameEvents subscriber: KSP's EventData.Add NREs on
+# a null delegate Target and aborts the rest of the registration block.
+lint-gameevents:
+	python3 scripts/check_gameevents_static.py
+
 # Compile the main KK-free mod using stripped reference assemblies.
-compile-main:
+compile-main: lint-gameevents
 	@test -d $(STUBS_DIR)/KSP_Data || { echo "Run 'make deps' first to download KSP reference assemblies"; exit 1; }
 	dotnet build -c Release -p:KspDir="$(CURDIR)/$(STUBS_DIR)" -p:InformationalVersion="$(VERSION)" KSPArchipelago/KSPArchipelago.csproj
 

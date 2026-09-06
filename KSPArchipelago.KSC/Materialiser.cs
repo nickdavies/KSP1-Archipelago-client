@@ -67,8 +67,6 @@ namespace KSPArchipelago.KSC
         public static GroupCenter LastGroupCenter = null;
         public static BodySpec LastSpec;
 
-        private static bool _onLaunchHooked = false;
-
         public static void Materialise(BodySpec spec)
         {
             if (spec.Name == "Kerbin")
@@ -156,7 +154,6 @@ namespace KSPArchipelago.KSC
             // it here NREs because LaunchSiteManager.setLaunchSite writes to
             // EditorLogic.fetch.launchSiteName, and EditorLogic only exists
             // in the VAB/SPH scene (we're in SpaceCenter right now).
-            HookOnLaunchDefense();
 
             FlipHomeFlag(body);
             RelocateDSN(spec, body);
@@ -991,41 +988,8 @@ namespace KSPArchipelago.KSC
         // 6. Default-launch-site selection lives in EditorLaunchGate;
         // LaunchSiteManager.setLaunchSite NREs in SpaceCenter scene.
 
-        // 7. Belt-and-braces: if anything bypasses the picker gate (e.g.,
-        // a mod or console command), a launch from stock Kerbin pads
-        // on an alien run produces a clear screen warning rather than
-        // dumping the player on Kerbin with no way back to AP logic.
-        private static void HookOnLaunchDefense()
-        {
-            if (_onLaunchHooked) return;
-            try
-            {
-                GameEvents.onLaunch.Add(OnLaunchHook);
-                _onLaunchHooked = true;
-            }
-            catch (Exception ex)
-            {
-                // KSP's EventData<T>.Add can NRE inside EvtDelegate ctor for
-                // certain static-method delegates (Target is null and the
-                // diagnostic-name builder dereferences it).  Defense hook is
-                // belt-and-braces only — the picker gate is the real
-                // protection — so swallow and continue.
-                Debug.LogWarning($"[KSPArchipelago.KSC] onLaunch defense hook failed: {ex.Message} (picker gate remains active)");
-            }
-        }
-
-        private static void OnLaunchHook(EventReport report)
-        {
-            if (CurrentBody == null || CurrentBody == "Kerbin") return;
-            string site = EditorLogic.fetch != null ? EditorLogic.fetch.launchSiteName : null;
-            if (site == "LaunchPad" || site == "Runway")
-            {
-                ScreenMessages.PostScreenMessage(
-                    $"Stock KSC pads are disabled when starting on {CurrentBody}. " +
-                    $"Use the \"{CurrentBody} LaunchPad\" or \"{CurrentBody} Runway\" instead.",
-                    8f, ScreenMessageStyle.UPPER_CENTER);
-            }
-        }
+        // 7. The stock-pad launch warning behind the picker gate lives on
+        // StartingBodyHandler.OnLaunch — GameEvents needs an instance handler.
 
     }
 }

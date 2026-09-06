@@ -587,13 +587,19 @@ namespace KSPArchipelago
             // is the location-check surface, not a general vessel-lifecycle
             // one, and because TrapManager's poll only ever sees ActiveVessel
             // (it would miss a station you just rendezvoused with).
-            GameEvents.onVesselGoOffRails.Add(Buffs.BuffManager.OnVesselGoOffRails);
+            GameEvents.onVesselGoOffRails.Add(OnVesselGoOffRails);
             GameEvents.onLevelWasLoadedGUIReady.Add(OnLevelLoadedGUIReady);
             GameEvents.Contract.onContractsLoaded.Add(OnContractsLoaded);
             // A cancelled/declined AP contract is still owed — re-offer it.
             GameEvents.Contract.onCancelled.Add(OnContractCancelledOrDeclined);
             GameEvents.Contract.onDeclined.Add(OnContractCancelledOrDeclined);
         }
+
+        // Instance adapter on purpose: GameEvents.Add reads the delegate's
+        // Target for its originator record, so a static handler NREs before
+        // the hook installs and aborts the rest of Start().
+        private void OnVesselGoOffRails(Vessel vessel)
+            => Buffs.BuffManager.OnVesselGoOffRails(vessel);
 
         private void OnContractCancelledOrDeclined(global::Contracts.Contract c)
         {
@@ -1627,7 +1633,7 @@ namespace KSPArchipelago
 
         public void OnDestroy()
         {
-            GameEvents.onVesselGoOffRails.Remove(Buffs.BuffManager.OnVesselGoOffRails);
+            GameEvents.onVesselGoOffRails.Remove(OnVesselGoOffRails);
             GameEvents.onGameStateLoad.Remove(new EventData<ConfigNode>.OnEvent(OnGameStateLoad));
             GameEvents.onGameSceneLoadRequested.Remove(OnSceneChange);
             GameEvents.onLevelWasLoadedGUIReady.Remove(OnLevelLoadedGUIReady);

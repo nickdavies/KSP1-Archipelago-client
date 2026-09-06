@@ -31,7 +31,33 @@ namespace KSPArchipelago.KSC
             DontDestroyOnLoad(this);
             Instance = this;
             StartingBodyBridge.SetHandler(this);
+            GameEvents.onLaunch.Add(OnLaunch);
             Debug.Log("[KSPArchipelago.KSC] Registered starting-body handler.");
+        }
+
+        void OnDestroy()
+        {
+            GameEvents.onLaunch.Remove(OnLaunch);
+        }
+
+        // Belt-and-braces behind the launch-site picker gate: if anything
+        // bypasses it (a mod, a console command), a launch from the stock
+        // Kerbin pads on an alien run gets a clear on-screen warning instead
+        // of dumping the player on Kerbin with no way back to AP logic.
+        // Instance method on purpose: GameEvents.Add reads the delegate's
+        // Target and NREs on a static handler.
+        private void OnLaunch(EventReport report)
+        {
+            string body = Materialiser.CurrentBody;
+            if (body == null || body == "Kerbin") return;
+            string site = EditorLogic.fetch != null ? EditorLogic.fetch.launchSiteName : null;
+            if (site == "LaunchPad" || site == "Runway")
+            {
+                ScreenMessages.PostScreenMessage(
+                    $"Stock KSC pads are disabled when starting on {body}. " +
+                    $"Use the \"{body} LaunchPad\" or \"{body} Runway\" instead.",
+                    8f, ScreenMessageStyle.UPPER_CENTER);
+            }
         }
 
         // Detect KK via the loaded-assembly list rather than typeof(KK.Type)
