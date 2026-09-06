@@ -16,7 +16,7 @@ namespace KSPArchipelago.Contracts.Primitives
     /// <c>crew_capacity</c>, <c>plant_flag</c>, <c>sample_return</c>, <c>has_system</c>,
     /// <c>specific_orbit</c>, <c>collect_science</c>, <c>rescue</c>,
     /// <c>surface_rescue</c>, <c>docking</c>, <c>survey_waypoint</c>,
-    /// <c>tourist</c>. (Schema 3 changed the
+    /// <c>tourist</c>, <c>returned_from</c>. (Schema 3 changed the
     /// wire format: a single <c>location</c> became a <c>locations</c> array.
     /// Schema 4 added the <c>rescue</c> primitive, which spawns a stranded Kerbal
     /// — the first world-mutating primitive. Schema 5 lets a non-goal contract's
@@ -26,8 +26,16 @@ namespace KSPArchipelago.Contracts.Primitives
     /// Schema 7 added three stock-backed run-variety types: <c>docking</c>
     /// (event-based, repeatable dock at a body), <c>survey_waypoint</c>
     /// (deterministic ground survey site), and <c>tourist</c>
-    /// (resolve-or-create tourism). A <c>part_test</c> primitive is deferred
-    /// pending an in-game-validated custom parameter.)
+    /// (resolve-or-create tourism). Schema 7 also carries the return/sample
+    /// evidence rework: the new <c>returned_from</c> kind expresses all three
+    /// return tiers, <c>collect_science</c> gained <c>location:"any"</c>,
+    /// <c>tourist.entry</c> switched to the shared achievement vocabulary
+    /// (suborbital|flyby|orbit|surface), and <c>sample_return</c> tightened to
+    /// "a surface sample physically came home" with its wire form unchanged —
+    /// which is exactly why it had to ride a schema bump, since ValidateSchema
+    /// is exact-match and cannot see a semantic change to an existing kind. A
+    /// <c>part_test</c> primitive is deferred pending an in-game-validated
+    /// custom parameter.)
     /// </summary>
     public static class ContractPrimitiveRegistry
     {
@@ -53,6 +61,7 @@ namespace KSPArchipelago.Contracts.Primitives
             Register(new DockingPrimitive());
             Register(new SurveyWaypointPrimitive());
             Register(new TouristPrimitive());
+            Register(new ReturnedFromPrimitive());
         }
 
         private static void Register(IContractPrimitive primitive)

@@ -2,12 +2,14 @@ using System;
 using Contracts;
 using Newtonsoft.Json.Linq;
 using KSPArchipelago.Contracts.Parameters;
+using KSPArchipelago.Missions;
 
 namespace KSPArchipelago.Contracts.Primitives
 {
     /// <summary>
     /// <c>{ "kind":"tourist", "name":"Bob Kerman", "female":false, "body":"Mun",
-    /// "entry":"Orbit" }</c>  (entry ∈ {Suborbit, Orbit})
+    /// "entry":"orbit" }</c>  (entry uses the shared achievement vocabulary:
+    /// suborbital | flyby | orbit | surface)
     ///
     /// Builds an <see cref="ApTouristParameter"/>, which resolves-or-creates a
     /// <c>KerbalType.Tourist</c> for the seeded name+gender and hosts the stock
@@ -40,31 +42,24 @@ namespace KSPArchipelago.Contracts.Primitives
             string body = (string)spec["body"];
             if (string.IsNullOrEmpty(body))
                 throw new FormatException("tourist primitive missing 'body'");
+            string entry = (string)spec["entry"];
+            if (string.IsNullOrEmpty(entry))
+                throw new FormatException("tourist primitive missing 'entry'");
             return new Spec
             {
                 Name = name,
                 Female = female.Value,
                 Body = body,
-                Entry = ParseEntry((string)spec["entry"]),
+                // The shared achievement vocabulary and its single
+                // FlightLog.EntryType mapping — the stock tour parameter this
+                // primitive hosts is driven by the entry type, so tourism and
+                // the return family name flight-log entries the same way.
+                Entry = AchievementVocabulary.ToEntryType(
+                    AchievementVocabulary.Parse(entry)),
             };
         }
 
         protected override ContractParameter BuildFrom(Spec p)
             => new ApTouristParameter(p.Name, p.Female, p.Body, p.Entry);
-
-        private static FlightLog.EntryType ParseEntry(string s)
-        {
-            switch ((s ?? "").ToLowerInvariant())
-            {
-                case "suborbit":
-                case "suborbital": return FlightLog.EntryType.Suborbit;
-                case "orbit":
-                case "orbiting":   return FlightLog.EntryType.Orbit;
-                default:
-                    throw new FormatException(
-                        $"tourist primitive: unknown entry '{s}' "
-                        + "(expected Suborbit or Orbit)");
-            }
-        }
     }
 }

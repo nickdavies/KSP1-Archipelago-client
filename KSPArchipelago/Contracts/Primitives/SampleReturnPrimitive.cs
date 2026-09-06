@@ -1,23 +1,21 @@
 using System;
 using Contracts;
-using Contracts.Parameters;
 using Newtonsoft.Json.Linq;
+using KSPArchipelago.Contracts.Parameters;
 
 namespace KSPArchipelago.Contracts.Primitives
 {
     /// <summary>
     /// <c>{ "kind": "sample_return", "body": "Mun" }</c>
     ///
-    /// Maps to stock <see cref="CollectScience"/> bound to the body's SURFACE:
-    /// completes when surface science from <c>body</c> is received (recovered or
-    /// transmitted) — the surface-sample-return mission satisfies it on recovery.
-    /// Self-tracks via GameEvents.OnScienceRecieved; no host entity required.
+    /// Semantics: a <c>{body}</c> surface SAMPLE physically came home. No crew
+    /// check — an uncrewed sample-return probe counts. Transmitted science never
+    /// counts: transmitting leaves the sample where it was taken.
     ///
-    /// Note: stock CollectScience(Surface) fires on any surface science from the
-    /// body, which is slightly looser than "a surface SAMPLE specifically" — an
-    /// acceptable out-of-logic easing (the contract item + physics gates still
-    /// apply). If strict sample-only is wanted later, a custom recover param
-    /// mirroring MissionTracker's surfaceSample detection is the upgrade.
+    /// Builds a <see cref="RecoveredSurfaceSampleParameter"/>, which rides the
+    /// shared <c>MissionEvidence</c> milestone — the same evidence
+    /// MissionTracker awards the <c>{B} Sample Return</c> AP location from, so
+    /// the objective and its location cannot disagree.
     /// </summary>
     public sealed class SampleReturnPrimitive : ContractPrimitiveBase<string>
     {
@@ -36,7 +34,7 @@ namespace KSPArchipelago.Contracts.Primitives
             CelestialBody body = FlightGlobals.GetBodyByName(bodyName);
             if (body == null)
                 throw new FormatException($"sample_return primitive: unknown body '{bodyName}'");
-            return new CollectScience(body, BodyLocation.Surface);
+            return new RecoveredSurfaceSampleParameter(bodyName);
         }
     }
 }

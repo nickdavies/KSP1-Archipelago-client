@@ -5,6 +5,7 @@ using System.Threading;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 using Archipelago.MultiClient.Net;
+using KSPArchipelago.Missions;
 
 namespace KSPArchipelago
 {
@@ -81,16 +82,6 @@ namespace KSPArchipelago
         internal static Dictionary<string, string> TechDisplayNames = new Dictionary<string, string>();
 
         private const float MissionScienceBonus = 5f;
-
-        /// True for player-created vessels (ships, probes, EVA kerbals, etc.).
-        /// False for asteroids, debris, and flags.
-        private static bool IsMissionVessel(Vessel v)
-        {
-            if (v == null) return false;
-            return v.vesselType != VesselType.SpaceObject &&
-                   v.vesselType != VesselType.Flag &&
-                   v.vesselType != VesselType.Debris;
-        }
 
         // volatile: assigned on the console thread (OnConnect/OnDisconnect),
         // read on the main thread and the send worker.
@@ -175,12 +166,6 @@ namespace KSPArchipelago
         private long homeFirstLaunchId, homeFirstStagingId,
                      homeFirstLandingId, homeFirstCrashId;
         private Dictionary<int, long> altitudeIds;
-
-        // Runtime-only: vessel persistentIds that have achieved home-body orbit.
-        // Used to gate the home-body "Return" event — only vessels that
-        // previously orbited home qualify. Not persisted; onOrbit re-fires
-        // on scene load for orbiting vessels.
-        private readonly HashSet<uint> _vesselsOrbitedHome = new HashSet<uint>();
 
         // Goal detection: cached location IDs whose checks indicate victory.
         // Set via SetGoalLocations() from slot_data; polled by IsGoalMet().
@@ -437,10 +422,16 @@ namespace KSPArchipelago
                 new EventData<Vessel, CelestialBody>.OnEvent(OnEscape));
             GameEvents.VesselSituation.onLand.Add(
                 new EventData<Vessel, CelestialBody>.OnEvent(OnLand));
-            GameEvents.VesselSituation.onReturnFromOrbit.Add(
-                new EventData<Vessel, CelestialBody>.OnEvent(OnReturnFromOrbit));
-            GameEvents.VesselSituation.onReturnFromSurface.Add(
-                new EventData<Vessel, CelestialBody>.OnEvent(OnReturnFromSurface));
+
+            // The return/sample family. FlightMilestoneSource owns every
+            // GameEvents hook for it (onVesselRecovered, onReturnFrom*, the
+            // home landing/splashdown) and publishes one FlightMilestone per
+            // "the craft is home" signal; OnMilestone turns that evidence into
+            // AP checks. Contract parameters subscribe to the SAME event, which
+            // is what stops a location and its contract disagreeing about what
+            // a flight proved.
+            FlightMilestoneSource.Register();
+            MissionEvidence.Observed += OnMilestone;
 
             GameEvents.onVesselSituationChange.Add(
                 new EventData<GameEvents.HostedFromToAction<Vessel, Vessel.Situations>>.OnEvent(OnSituationChange));
@@ -479,10 +470,9 @@ namespace KSPArchipelago
                 new EventData<Vessel, CelestialBody>.OnEvent(OnEscape));
             GameEvents.VesselSituation.onLand.Remove(
                 new EventData<Vessel, CelestialBody>.OnEvent(OnLand));
-            GameEvents.VesselSituation.onReturnFromOrbit.Remove(
-                new EventData<Vessel, CelestialBody>.OnEvent(OnReturnFromOrbit));
-            GameEvents.VesselSituation.onReturnFromSurface.Remove(
-                new EventData<Vessel, CelestialBody>.OnEvent(OnReturnFromSurface));
+
+            MissionEvidence.Observed -= OnMilestone;
+            FlightMilestoneSource.Unregister();
 
             GameEvents.onVesselSituationChange.Remove(
                 new EventData<GameEvents.HostedFromToAction<Vessel, Vessel.Situations>>.OnEvent(OnSituationChange));
@@ -747,66 +737,6 @@ namespace KSPArchipelago
         }
 
         // ------------------------------------------------------------------
-        // Surface sample detection
-        // ------------------------------------------------------------------
-
-        private const string SurfaceSamplePrefix = "surfaceSample@";
-
-        // Extracts the body name from a surfaceSample subject ID.
-        // Format: surfaceSample@{Body}Srf{Landed|Splashed}{Biome}
-        private static string ExtractSampleBody(string subjectId)
-        {
-            if (!subjectId.StartsWith(SurfaceSamplePrefix, StringComparison.Ordinal))
-                return null;
-            int srfIdx = subjectId.IndexOf("Srf", SurfaceSamplePrefix.Length, StringComparison.Ordinal);
-            if (srfIdx <= SurfaceSamplePrefix.Length) return null;
-            return subjectId.Substring(SurfaceSamplePrefix.Length, srfIdx - SurfaceSamplePrefix.Length);
-        }
-
-        // Returns all body names that have surface-sample data on a ProtoVessel.
-        private HashSet<string> CollectSurfaceSampleBodies(ProtoVessel vessel)
-        {
-            var bodies = new HashSet<string>();
-            foreach (ProtoPartSnapshot part in vessel.protoPartSnapshots)
-            {
-                foreach (ProtoPartModuleSnapshot module in part.modules)
-                {
-                    if (module.moduleName != "ModuleScienceExperiment" &&
-                        module.moduleName != "ModuleScienceContainer")
-                        continue;
-                    foreach (ConfigNode dataNode in module.moduleValues.GetNodes("ScienceData"))
-                    {
-                        string body = ExtractSampleBody(dataNode.GetValue("subjectID") ?? "");
-                        if (body != null) bodies.Add(body);
-                    }
-                }
-            }
-            return bodies;
-        }
-
-        // Returns all body names that have surface-sample data on a live Vessel.
-        private HashSet<string> CollectSurfaceSampleBodies(Vessel vessel)
-        {
-            var bodies = new HashSet<string>();
-            foreach (Part part in vessel.Parts)
-            {
-                foreach (PartModule module in part.Modules)
-                {
-                    IScienceDataContainer container = module as IScienceDataContainer;
-                    if (container == null) continue;
-                    ScienceData[] data = container.GetData();
-                    if (data == null) continue;
-                    foreach (ScienceData d in data)
-                    {
-                        string body = ExtractSampleBody(d.subjectID ?? "");
-                        if (body != null) bodies.Add(body);
-                    }
-                }
-            }
-            return bodies;
-        }
-
-        // ------------------------------------------------------------------
         // KSC biome science detection
         // ------------------------------------------------------------------
 
@@ -861,22 +791,11 @@ namespace KSPArchipelago
         // Backup hook: scan a recovered vessel's experiment modules for KSC
         // biome science data. OnScienceRecieved does not fire reliably on
         // recovery in all cases, so we also extract subject IDs directly
-        // from the stored ScienceData config nodes.
+        // from the stored ScienceData config nodes. The return/sample checks a
+        // recovery earns arrive separately, via OnMilestone.
         private void OnVesselRecovered(ProtoVessel vessel, bool quick)
         {
             if (vessel == null) return;
-
-            // Award Return + Sample Return for every body whose surface sample is on
-            // board. A surface sample at recovery is strictly stronger evidence than the
-            // stock onReturnFromSurface/onReturnFromOrbit flight-log signal, which misses
-            // the EVA-bailout case: a kerbal carries the sample down under personal chute
-            // from Kerbin orbit on a "vessel" whose flight log never recorded the body.
-            // Both locations are idempotent, so re-firing in the common path is a no-op.
-            foreach (string body in CollectSurfaceSampleBodies(vessel))
-            {
-                ReportBodyEvent(body, "Return");
-                ReportBodyEvent(body, "Sample Return");
-            }
 
             foreach (ProtoPartSnapshot part in vessel.protoPartSnapshots)
             {
@@ -921,7 +840,7 @@ namespace KSPArchipelago
 
         private void OnFlyBy(Vessel vessel, CelestialBody body)
         {
-            if (!IsMissionVessel(vessel)) return;
+            if (!FlightMilestoneSource.IsMissionVessel(vessel)) return;
             ReportBodyEvent(body.name, "Flyby");
         }
 
@@ -932,7 +851,7 @@ namespace KSPArchipelago
             // This catches that case and acts as belt-and-suspenders for all bodies.
             // Leaving a moon back to its planet is filtered out because
             // data.from (the moon) != data.to.referenceBody (the planet's parent).
-            if (!IsMissionVessel(data.host)) return;
+            if (!FlightMilestoneSource.IsMissionVessel(data.host)) return;
             CelestialBody to = data.to;
             if (to == null) return;
             bool arrivingFromParent = data.from == to.referenceBody;
@@ -968,15 +887,13 @@ namespace KSPArchipelago
 
         private void OnOrbit(Vessel vessel, CelestialBody body)
         {
-            if (!IsMissionVessel(vessel)) return;
+            if (!FlightMilestoneSource.IsMissionVessel(vessel)) return;
             ReportBodyEvent(body.name, "Orbit");
-            if (body.name == KSPArchipelagoMod.StartingBody)
-                _vesselsOrbitedHome.Add(vessel.persistentId);
         }
 
         private void OnEscape(Vessel vessel, CelestialBody body)
         {
-            if (!IsMissionVessel(vessel)) return;
+            if (!FlightMilestoneSource.IsMissionVessel(vessel)) return;
             // Entering a moon's SOI (e.g. Duna→Ike) fires onEscape for the parent.
             // Only report SOI Leave for a true system escape, not moon encounters.
             CelestialBody newBody = vessel.mainBody;
@@ -988,35 +905,99 @@ namespace KSPArchipelago
 
         private void OnLand(Vessel vessel, CelestialBody body)
         {
-            if (!IsMissionVessel(vessel)) return;
+            if (!FlightMilestoneSource.IsMissionVessel(vessel)) return;
             HandleTouchdown(vessel, body);
         }
 
-        // Shared by OnLand and the SPLASHED branch of OnSituationChange —
-        // onLand does not fire for SPLASHED, and ocean touchdowns count as
-        // landings in the generator's model.
+        // Landing credit AWAY from home. Shared by OnLand and the SPLASHED
+        // branch of OnSituationChange — onLand does not fire for every
+        // splashdown path, and ocean touchdowns count as landings in the
+        // generator's model.
+        //
+        // Home touchdowns are deliberately not handled here: they are a
+        // FlightMilestone (FlightMilestoneSource hooks the same two signals for
+        // the home body) and OnMilestone applies the "must have orbited home
+        // first" gate that a sub-orbital hop must not pass.
         private void HandleTouchdown(Vessel vessel, CelestialBody body)
         {
-            if (body.name == KSPArchipelagoMod.StartingBody)
-            {
-                // Home-body Landing/Return require the vessel to have achieved
-                // home orbit first — matches the generator's home LAND/RETURN
-                // profile (ascent + deorbit). Sub-orbital hops don't qualify.
-                if (!_vesselsOrbitedHome.Contains(vessel.persistentId))
-                    return;
-                ReportBodyEvent(body.name, "Return");
-                foreach (string sampleBody in CollectSurfaceSampleBodies(vessel))
-                    ReportBodyEvent(sampleBody, "Sample Return");
-            }
+            if (body.name == KSPArchipelagoMod.StartingBody) return;
             ReportBodyEvent(body.name, "Landing");
             if (vessel.GetCrewCount() > 0)
                 ReportBodyEvent(body.name, "Crewed Landing");
         }
 
+        /// <summary>
+        /// The one place a "the craft came home" milestone becomes AP checks.
+        /// Replaces four separately-hooked handlers (recovery, both stock
+        /// onReturnFrom* events, and the home touchdown), all of which used to
+        /// answer "what did this flight prove" differently.
+        ///
+        /// Every award reads the flight-log SET for a body and asks for exactly
+        /// the entry that tier needs — no tier implies another (see
+        /// MissionAchievement). That is what stops a Duna flyby from claiming
+        /// the land-and-return check, and what lets a direct-entry landing take
+        /// Return without ever having orbited.
+        ///
+        /// ReportLocation is idempotent, so overlapping milestones (a landing
+        /// at home followed by recovering the same craft) cost nothing.
+        /// </summary>
+        private void OnMilestone(FlightMilestone milestone)
+        {
+            string home = KSPArchipelagoMod.StartingBody;
+
+            // Home tiers, realigned: at home the surface tier is the trivial one
+            // — the craft is by definition home, so walking out at the pad and
+            // recovering satisfies it. Orbit Return is the one that costs a
+            // launch. ({home} SOI Return is banned server-side and never
+            // reported: no such location exists.)
+            ReportBodyEvent(home, "Return");
+
+            bool orbitedHome = milestone.HasAchievement(home, MissionAchievement.Orbit);
+            if (orbitedHome)
+                ReportBodyEvent(home, "Orbit Return");
+
+            // Home Landing/Crewed Landing keep their "must have orbited first"
+            // gate (a sub-orbital hop is not a landing mission), except on a
+            // ReturnedHome milestone: arriving from another body is a home
+            // landing by construction, which is how the stock onReturnFrom*
+            // handlers credited it.
+            if (orbitedHome || milestone.Kind == FlightMilestoneKind.ReturnedHome)
+            {
+                ReportBodyEvent(home, "Landing");
+                if (milestone.CrewCount > 0)
+                    ReportBodyEvent(home, "Crewed Landing");
+            }
+
+            // One tier per entry the log actually holds, independently.
+            foreach (var entry in milestone.AchievementsByBody)
+            {
+                if (entry.Key == home) continue;
+                HashSet<MissionAchievement> proved = entry.Value;
+                if (proved.Contains(MissionAchievement.Flyby))
+                    ReportBodyEvent(entry.Key, "SOI Return");
+                if (proved.Contains(MissionAchievement.Orbit))
+                    ReportBodyEvent(entry.Key, "Orbit Return");
+                if (proved.Contains(MissionAchievement.Surface))
+                    ReportBodyEvent(entry.Key, "Return");
+            }
+
+            // A recovered surface sample proves both halves of the surface tier
+            // — the craft reached that surface AND it came home — so it awards
+            // Return as well as Sample Return. This is the backstop for a craft
+            // with no ModuleTripLogger and for the EVA bailout, where the sample
+            // rides home on a kerbal whose "vessel" has no flight log. It says
+            // nothing about flybys or orbits, so those are never inferred.
+            foreach (string sampleBody in milestone.SurfaceSampleBodies)
+            {
+                ReportBodyEvent(sampleBody, "Sample Return");
+                ReportBodyEvent(sampleBody, "Return");
+            }
+        }
+
         private void OnSituationChange(GameEvents.HostedFromToAction<Vessel, Vessel.Situations> data)
         {
             Vessel v = data.host;
-            if (!IsMissionVessel(v)) return;
+            if (!FlightMilestoneSource.IsMissionVessel(v)) return;
             CelestialBody mainBody = v.mainBody;
             string body = mainBody?.name;
             string home = KSPArchipelagoMod.StartingBody;
@@ -1060,35 +1041,6 @@ namespace KSPArchipelago
             ReportBodyEvent(body, "Flag Plant");
         }
 
-        // onReturnFromOrbit fires when a vessel returns to the home body after
-        // having orbited another body. The body parameter is the remote body
-        // (e.g. Mun), not the home.
-        private void OnReturnFromOrbit(Vessel vessel, CelestialBody body)
-        {
-            if (!IsMissionVessel(vessel)) return;
-            string home = KSPArchipelagoMod.StartingBody;
-            ReportBodyEvent(body.name, "Return");
-            // Also count as a home-body landing (deorbit + recovery)
-            ReportBodyEvent(home, "Landing");
-            if (vessel.GetCrewCount() > 0)
-                ReportBodyEvent(home, "Crewed Landing");
-        }
-
-        // onReturnFromSurface fires when a vessel returns to the home body
-        // after having landed on another body.
-        private void OnReturnFromSurface(Vessel vessel, CelestialBody body)
-        {
-            if (!IsMissionVessel(vessel)) return;
-            string home = KSPArchipelagoMod.StartingBody;
-            ReportBodyEvent(body.name, "Return");
-            foreach (string sampleBody in CollectSurfaceSampleBodies(vessel))
-                ReportBodyEvent(sampleBody, "Sample Return");
-            // Also count as a home-body landing (deorbit + recovery)
-            ReportBodyEvent(home, "Landing");
-            if (vessel.GetCrewCount() > 0)
-                ReportBodyEvent(home, "Crewed Landing");
-        }
-
         private void OnStageSeparation(EventReport report)
         {
             if (checkedLocationIds.Contains(homeFirstStagingId)) return;
@@ -1106,7 +1058,7 @@ namespace KSPArchipelago
         {
             if (onDeath == null || SimulationMode) return;
             Vessel v = FlightGlobals.ActiveVessel;
-            if (v == null || !IsMissionVessel(v)) return;               // ignore debris / detached boosters
+            if (v == null || !FlightMilestoneSource.IsMissionVessel(v)) return;               // ignore debris / detached boosters
             if (VesselDestruction.IsDestroying(v.persistentId)) return; // mod-initiated kill (e.g. received DeathLink) — never rebroadcast
             if (!_deathSent.Add(v.persistentId)) return;                // already sent for this vessel
             onDeath(cause);
@@ -1156,7 +1108,7 @@ namespace KSPArchipelago
 
             if (checkedLocationIds.Contains(homeFirstCrashId)) return;
             Vessel v = FlightGlobals.ActiveVessel;
-            if (v == null || !IsMissionVessel(v)) return;
+            if (v == null || !FlightMilestoneSource.IsMissionVessel(v)) return;
             string home = KSPArchipelagoMod.StartingBody;
             if (v.mainBody?.name != home) return;
             ReportLocation($"{home} First Crash", grantScience: true);
