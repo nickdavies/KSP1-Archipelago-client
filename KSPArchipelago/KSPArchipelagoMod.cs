@@ -1569,6 +1569,22 @@ namespace KSPArchipelago
             lock (_deathLock) { pending = _hasPendingDeath; cause = _pendingDeathCause; }
             if (!pending) return;
 
+            // Simulation mode is a full no-op for DeathLink, both directions: the
+            // send path is gated in MissionTracker.SendDeath and incoming deaths
+            // are DISCARDED here rather than held. Holding would ambush the player
+            // with a queued kill the moment they went live again, and a practice
+            // flight that a real death interrupted was never a real flight anyway.
+            if (missionTracker != null && missionTracker.SimulationMode)
+            {
+                lock (_deathLock) { _hasPendingDeath = false; _pendingDeathCause = null; }
+                _deathArmedVesselId = uint.MaxValue;
+                Debug.Log($"[KSP-AP] DeathLink discarded — simulation mode (cause: {cause}).");
+                ScreenMessages.PostScreenMessage(
+                    $"<color=orange>DEATHLINK ignored (simulation):</color> {cause}",
+                    5f, ScreenMessageStyle.UPPER_CENTER);
+                return;
+            }
+
             if (!HighLogic.LoadedSceneIsFlight) { _deathArmedVesselId = uint.MaxValue; return; }
             Vessel v = FlightGlobals.ActiveVessel;
             if (v == null) { _deathArmedVesselId = uint.MaxValue; return; }
@@ -1589,9 +1605,9 @@ namespace KSPArchipelago
             lock (_deathLock) { _hasPendingDeath = false; _pendingDeathCause = null; }
             _deathArmedVesselId = uint.MaxValue;
 
-            // Pre-mark BEFORE Destroy so the explosion's crash/crew-death events
-            // can't broadcast a DeathLink back (anti-loop).
-            missionTracker?.SuppressDeathSend(v.persistentId);
+            // VesselDestruction.Destroyed pre-marks the victim for the tracker, so
+            // the explosion's crash/crew-death events can't broadcast a DeathLink
+            // back (anti-loop) and a revert from the wreck isn't billed either.
             Debug.Log($"[KSP-AP] DeathLink applying kill to '{v.vesselName}' (cause: {cause}).");
             VesselDestruction.Destroy(
                 this, v,

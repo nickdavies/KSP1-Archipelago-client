@@ -96,16 +96,27 @@ namespace KSPArchipelago
         private Action<string> onSendFailed;
         // DeathLink send callback (cause -> AP Bounce). Non-null only when the seed
         // enabled DeathLink; null disables all outgoing deaths. Invoked from
-        // OnCrash / OnCrewKilled via SendDeath.
+        // OnRootPartWillDie / OnCrewKilled via SendDeath.
         private Action<string> onDeath;
         // Per-vessel dedup for outgoing deaths, scoped to ONE flight (cleared on
-        // onFlightReady). Crash events fire per-part, and a crash + crew-death of
-        // the same craft must send only one death. Also pre-marked by the receive
-        // path (SuppressDeathSend) so a received-death kill never rebroadcasts
-        // (anti-loop). Must NOT persist across flights: Revert-to-Launch reuses a
-        // craft's persistentId, so a session-lifetime set would permanently bar a
-        // reflown craft from ever broadcasting again.
+        // onFlightReady). MurderCrew kills each crew member individually, so a
+        // three-seat pod fires onCrewKilled three times; a craft that loses its
+        // root part with crew aboard fires both paths. All of that is ONE death.
+        // Also pre-marked by OnModDestroyedVessel so a mod-initiated kill never
+        // rebroadcasts (anti-loop). Must NOT persist across flights:
+        // Revert-to-Launch reuses a craft's persistentId, so a session-lifetime
+        // set would permanently bar a reflown craft from ever broadcasting again.
         private readonly HashSet<uint> _deathSent = new HashSet<uint>();
+        // True once ANY death has been broadcast for the current flight, whatever
+        // vessel it was charged to. The revert path needs this rather than
+        // _deathSent because by revert time the craft that died may be gone or
+        // no longer the active vessel, so its persistentId is unrecoverable.
+        // Cleared with _deathSent on onFlightReady.
+        private bool _deathSentThisFlight;
+        // slot_data death_link_on_revert. Reverting a flight that actually
+        // launched broadcasts a death. Only consulted when onDeath is non-null,
+        // so it is inert unless the seed also enabled DeathLink.
+        private bool deathLinkOnRevert;
 
         // Simulation / practice mode. When true, ReportLocation short-circuits
         // to a "would check" toast and does NOT send, queue, dedup, or reward —
@@ -282,6 +293,11 @@ namespace KSPArchipelago
             }
             else missing.Add("ksc_biome_locations");
 
+            // Optional: charge a death for reverting a launched flight. Absent on
+            // seeds generated before the option existed -> off. Not required.
+            deathLinkOnRevert = slotData.TryGetValue("death_link_on_revert", out object dlrObj)
+                                && Convert.ToInt32(dlrObj) != 0;
+
             if (missing.Count > 0)
                 return "Server slot_data missing required keys: " + string.Join(", ", missing);
 
@@ -457,7 +473,14 @@ namespace KSPArchipelago
                 new EventData<EventReport>.OnEvent(OnCrash));
             GameEvents.onCrewKilled.Add(
                 new EventData<EventReport>.OnEvent(OnCrewKilled));
+            GameEvents.onPartWillDie.Add(
+                new EventData<Part>.OnEvent(OnRootPartWillDie));
+            GameEvents.OnRevertToLaunchFlightState.Add(
+                new EventData<FlightState>.OnEvent(OnRevert));
+            GameEvents.OnRevertToPrelaunchFlightState.Add(
+                new EventData<FlightState>.OnEvent(OnRevert));
             GameEvents.onFlightReady.Add(OnFlightReadyResetDeaths);
+            VesselDestruction.Destroyed += OnModDestroyedVessel;
         }
 
         private void UnregisterEvents()
@@ -497,7 +520,14 @@ namespace KSPArchipelago
                 new EventData<EventReport>.OnEvent(OnCrash));
             GameEvents.onCrewKilled.Remove(
                 new EventData<EventReport>.OnEvent(OnCrewKilled));
+            GameEvents.onPartWillDie.Remove(
+                new EventData<Part>.OnEvent(OnRootPartWillDie));
+            GameEvents.OnRevertToLaunchFlightState.Remove(
+                new EventData<FlightState>.OnEvent(OnRevert));
+            GameEvents.OnRevertToPrelaunchFlightState.Remove(
+                new EventData<FlightState>.OnEvent(OnRevert));
             GameEvents.onFlightReady.Remove(OnFlightReadyResetDeaths);
+            VesselDestruction.Destroyed -= OnModDestroyedVessel;
         }
 
         // ------------------------------------------------------------------
@@ -1052,35 +1082,101 @@ namespace KSPArchipelago
 
         // Broadcast a DeathLink for the player's OWN death. Guards ensure only a
         // real, player-caused death of the active mission vessel sends — exactly
-        // once per vessel, never a mod-initiated kill (anti-loop). No-op when
-        // DeathLink is off (onDeath == null) or in practice mode.
+        // once per vessel. A mod-initiated kill never rebroadcasts (anti-loop)
+        // because OnModDestroyedVessel pre-marks the victim in _deathSent before
+        // the first part explodes. No-op when DeathLink is off (onDeath == null)
+        // or in practice mode.
         private void SendDeath(string cause)
         {
             if (onDeath == null || SimulationMode) return;
             Vessel v = FlightGlobals.ActiveVessel;
-            if (v == null || !FlightMilestoneSource.IsMissionVessel(v)) return;               // ignore debris / detached boosters
-            if (VesselDestruction.IsDestroying(v.persistentId)) return; // mod-initiated kill (e.g. received DeathLink) — never rebroadcast
-            if (!_deathSent.Add(v.persistentId)) return;                // already sent for this vessel
+            if (v == null || !FlightMilestoneSource.IsMissionVessel(v)) return;   // ignore debris / detached boosters
+            if (!_deathSent.Add(v.persistentId)) return;                          // already sent for this vessel
+            _deathSentThisFlight = true;
             onDeath(cause);
         }
 
-        /// <summary>
-        /// Mark a vessel as already-handled so a subsequent crash/crew-death for it
-        /// cannot broadcast a DeathLink. The receive path calls this immediately
-        /// before destroying the craft in response to an incoming death, so the
-        /// resulting explosion never ping-pongs a death back.
-        /// </summary>
-        public void SuppressDeathSend(uint persistentId) => _deathSent.Add(persistentId);
+        // A DeathLink-worthy loss of the craft: the root part of the vessel the
+        // player is flying is about to die, which is KSP's own definition of
+        // "vessel destroyed" — Part.Die() calls vessel.Die() exactly when
+        // rootPart == this. Deliberately NOT onCrash: that fires once per part
+        // destroyed above its crash tolerance, so a snapped landing leg, a
+        // sheared solar panel, or a spent booster hitting the ground inside
+        // physics range all read as deaths while the mission flies on.
+        //
+        // Vessel.Die() destroys its parts with Object.Destroy rather than
+        // Part.Die(), so recovery and on-rails cleanup never reach this hook.
+        private void OnRootPartWillDie(Part p)
+        {
+            if (p == null) return;
+            Vessel v = p.vessel;
+            if (v == null || v.rootPart != p) return;
+            // Only the craft the player is actually flying. A jettisoned stage
+            // or a nearby wreck losing its root is not the player's death.
+            if (FlightGlobals.ActiveVessel != v) return;
+            SendDeath("was destroyed");
+        }
+
+        // The mod destroyed a craft — an incoming DeathLink, the launch-pad mass
+        // gate, or a collision with an undiscovered body. Settle its DeathLink
+        // bookkeeping up front: the explosion this is about to cause must not
+        // ping-pong a death back, and the player must not be billed a revert
+        // death for backing out of a wreck the mod created. Fires before the
+        // kill is scheduled, so the mark is always in place first.
+        //
+        // Only the craft the player is flying settles the FLIGHT: an unattended
+        // probe that drifts into a hidden body while you fly something else has
+        // nothing to do with whether reverting your current flight is a scum.
+        private void OnModDestroyedVessel(Vessel v)
+        {
+            if (v == null) return;
+            _deathSent.Add(v.persistentId);
+            if (FlightGlobals.ActiveVessel == v)
+                _deathSentThisFlight = true;
+        }
+
+        // Revert-to-Launch / Revert-to-Editor with death_link_on_revert on: undoing
+        // a flight that actually happened costs a death, so a failure can't be
+        // save-scummed away for free.
+        //
+        // Both revert events fire while the flight scene is still live (FlightDriver
+        // fires them immediately before LoadScene / StartEditor), so ActiveVessel is
+        // still readable here.
+        private void OnRevert(FlightState state)
+        {
+            if (onDeath == null || !deathLinkOnRevert || SimulationMode) return;
+            // Already paid for this flight — a crash, a crewed loss, or an incoming
+            // DeathLink that destroyed the craft. Reverting the wreck is free.
+            if (_deathSentThisFlight) return;
+
+            Vessel v = FlightGlobals.ActiveVessel;
+            if (v == null) return;
+            // Never launched: still clamped on the pad, or on the runway below the
+            // 2.5 m/s surface speed at which KSP drops PRELAUNCH. Checking a design
+            // or fixing a misclick is free. This is KSP's own "can revert to post-
+            // init" test (FlightDriver: CanRevertToPostInit = situation == PRELAUNCH),
+            // and PRELAUNCH never comes back once the craft has moved.
+            if (v.situation == Vessel.Situations.PRELAUNCH) return;
+
+            _deathSentThisFlight = true;
+            onDeath("reverted a flight");
+        }
 
         // A new flight (launch, Revert-to-Launch, or loading into flight) starts a
         // fresh death-dedup window. Without this, a persistentId pinned in
         // _deathSent by an earlier crash — or by a received-death kill via
-        // SuppressDeathSend — would permanently bar a reflown craft (same
+        // OnModDestroyedVessel — would permanently bar a reflown craft (same
         // persistentId after a revert) from broadcasting a death again.
-        private void OnFlightReadyResetDeaths() => _deathSent.Clear();
+        private void OnFlightReadyResetDeaths()
+        {
+            _deathSent.Clear();
+            _deathSentThisFlight = false;
+        }
 
-        // Crew death without a full crash (asphyxiation, EVA fall, decompression).
-        // Also a DeathLink-worthy death; same guards/dedup as OnCrash via SendDeath.
+        // A Kerbal died — asphyxiation, EVA fall, decompression, or a crewed part
+        // being destroyed. Always a DeathLink-worthy death even when the craft
+        // itself survives. onCrewKilled carries no origin part (KSP fires it with
+        // a null EventReport.origin), so SendDeath's ActiveVessel guards apply.
         private void OnCrewKilled(EventReport report)
         {
             SendDeath("lost their crew");
@@ -1092,20 +1188,10 @@ namespace KSPArchipelago
         // parts as Debris before firing crash events, breaking IsMissionVessel.
         // ActiveVessel is the craft the player is flying, so detached boosters
         // that crash separately won't trigger this.
+        //
+        // Location detection only — DeathLink lives on OnRootPartWillDie.
         private void OnCrash(EventReport report)
         {
-            // DeathLink broadcasts on ANY crash of the active mission vessel, so it
-            // sits above the home-body / first-crash gates (those only bound the
-            // location check). SendDeath dedups per-vessel across the per-part storm.
-            //
-            // Skip the broadcast when the player is on EVA: the crashing craft is
-            // then a *different* vessel from the active kerbal, but SendDeath keys
-            // off ActiveVessel — so charging the craft's crash to the kerbal would
-            // pin its id and dedup the kerbal's own death (onCrewKilled), which is
-            // the real death. A floating kerbal whose empty ship crashes hasn't died.
-            if (FlightGlobals.ActiveVessel?.vesselType != VesselType.EVA)
-                SendDeath("crashed");
-
             if (checkedLocationIds.Contains(homeFirstCrashId)) return;
             Vessel v = FlightGlobals.ActiveVessel;
             if (v == null || !FlightMilestoneSource.IsMissionVessel(v)) return;
