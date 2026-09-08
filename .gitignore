@@ -3,6 +3,8 @@ KSPArchipelago/bin
 KSPArchipelago/obj
 KSPArchipelago.KSC/bin
 KSPArchipelago.KSC/obj
+KSPArchipelago.KopernicusCompat/bin
+KSPArchipelago.KopernicusCompat/obj
 out/
 lib/
 KSP.log

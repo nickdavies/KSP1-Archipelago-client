@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net48</TargetFramework>
+		<KspDir>/home/nick/.local/share/Steam/steamapps/common/Kerbal Space Program</KspDir>
+		<KspManagedDir>$(KspDir)/KSP_Data/Managed</KspManagedDir>
+		<HarmonyDir>$(KspDir)/GameData/000_Harmony</HarmonyDir>
+		<AssemblyName>KSPArchipelago.KopernicusCompat</AssemblyName>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Reference Include="Assembly-CSharp">
+			<HintPath>$(KspManagedDir)/Assembly-CSharp.dll</HintPath>
+		</Reference>
+		<Reference Include="UnityEngine">
+			<HintPath>$(KspManagedDir)/UnityEngine.dll</HintPath>
+		</Reference>
+		<Reference Include="UnityEngine.CoreModule">
+			<HintPath>$(KspManagedDir)/UnityEngine.CoreModule.dll</HintPath>
+		</Reference>
+		<!-- Compile-time only. 0Harmony ships in the user's GameData (Kopernicus
+		     depends on it); this assembly is skipped by KSP's AssemblyLoader
+		     when it is absent, so we must not ship our own copy. -->
+		<Reference Include="0Harmony">
+			<HintPath>$(HarmonyDir)/0Harmony.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+	</ItemGroup>
+
+</Project>

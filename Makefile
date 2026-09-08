@@ -6,6 +6,7 @@ STUBS_DIR       = lib/ksp-stubs
 OUT_DIR         = out/KSPArchipelago
 BUILD_DIR_MAIN  = KSPArchipelago/bin/Release/net40
 BUILD_DIR_KSC   = KSPArchipelago.KSC/bin/Release/net48
+BUILD_DIR_KOP   = KSPArchipelago.KopernicusCompat/bin/Release/net48
 LOG             = $(HOME)/workspaces/ksp_ap/ksp_stdout_stderr.log
 
 # Build version stamped into the assemblies (read at runtime by ModVersion:
@@ -14,7 +15,7 @@ LOG             = $(HOME)/workspaces/ksp_ap/ksp_stdout_stderr.log
 # the v0.4.3 tag yields "0.4.3"; unstamped/untagged trees fall back to "dev".
 VERSION        ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))
 
-.PHONY: all compile compile-main compile-ksc lint-gameevents stage install run clean deps
+.PHONY: all compile compile-main compile-ksc compile-kopcompat lint-gameevents stage install run clean deps
 
 all: stage
 
@@ -22,6 +23,12 @@ all: stage
 # the KSP-RO fork — the older GER-Space fork is missing types we use.
 KK_VERSION      = v1.12.2.0
 KK_ZIP_URL      = https://github.com/KSP-RO/Kerbal-Konstructs/releases/download/$(KK_VERSION)/KerbalKonstructs-$(KK_VERSION).zip
+
+# Harmony, referenced only by the Kopernicus compatibility assembly. Compile
+# time only: 0Harmony ships in the user's GameData because Kopernicus depends
+# on it, so we must not ship a second copy.
+HARMONY_VERSION = 2.2.1.0
+HARMONY_ZIP_URL = https://github.com/KSPModdingLibs/HarmonyKSP/releases/download/$(HARMONY_VERSION)/HarmonyKSP_$(HARMONY_VERSION)_for_KSP1.8%2B.zip
 
 # Download KSP stripped reference assemblies + KK dll for compilation.
 deps:
@@ -33,6 +40,9 @@ deps:
 	curl -sL $(KK_ZIP_URL) -o /tmp/kk.zip
 	unzip -qo /tmp/kk.zip "GameData/KerbalKonstructs/KerbalKonstructs.dll" -d $(STUBS_DIR)
 	rm -f /tmp/kk.zip
+	curl -sL $(HARMONY_ZIP_URL) -o /tmp/harmony.zip
+	unzip -qo /tmp/harmony.zip "GameData/000_Harmony/0Harmony.dll" -d $(STUBS_DIR)
+	rm -f /tmp/harmony.zip
 
 # Generate placeholder parts cfg directly into the staging directory.
 $(OUT_DIR)/ap_placeholders.cfg: scripts/generate_placeholders.py
@@ -57,7 +67,13 @@ compile-main: lint-gameevents
 compile-ksc: compile-main
 	dotnet build -c Release -p:KspDir="$(CURDIR)/$(STUBS_DIR)" -p:InformationalVersion="$(VERSION)" KSPArchipelago.KSC/KSPArchipelago.KSC.csproj
 
-compile: compile-main compile-ksc
+# Compile the Kopernicus compatibility shim. Standalone, with no project
+# reference: it patches stock methods only, and KSP's AssemblyLoader drops it
+# whole when Kopernicus or 0Harmony is absent, which is the common case.
+compile-kopcompat:
+	dotnet build -c Release -p:KspDir="$(CURDIR)/$(STUBS_DIR)" -p:InformationalVersion="$(VERSION)" KSPArchipelago.KopernicusCompat/KSPArchipelago.KopernicusCompat.csproj
+
+compile: compile-main compile-ksc compile-kopcompat
 
 # Assemble the mod into out/KSPArchipelago.
 stage: compile $(OUT_DIR)/ap_placeholders.cfg
@@ -73,6 +89,7 @@ stage: compile $(OUT_DIR)/ap_placeholders.cfg
 	cp assets/Models/AP.mu $(OUT_DIR)/Models/
 	cp assets/Flags/*.png $(OUT_DIR)/FlagsAgency/   # AP flags -> browser "Agency" tab
 	cp $(BUILD_DIR_KSC)/KSPArchipelago.KSC.dll            $(OUT_DIR)/
+	cp $(BUILD_DIR_KOP)/KSPArchipelago.KopernicusCompat.dll $(OUT_DIR)/
 	cp KSPArchipelago.KSC/Heightmaps/APKSC_KerbinCurve.png $(OUT_DIR)/Heightmaps/
 	cp KSPArchipelago.KSC/Heightmaps/APKSC_KerbinCurve.cfg $(OUT_DIR)/Heightmaps/
 
@@ -94,3 +111,4 @@ clean:
 	rm -rf out/ assets/ap_placeholders.cfg
 	dotnet clean -c Release KSPArchipelago/KSPArchipelago.csproj
 	dotnet clean -c Release KSPArchipelago.KSC/KSPArchipelago.KSC.csproj
+	dotnet clean -c Release KSPArchipelago.KopernicusCompat/KSPArchipelago.KopernicusCompat.csproj
