@@ -12,9 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Must match the feature band pinned in global.json. The runner image
+      # also ships an SDK from a later band, and without a pin the NuGet
+      # restore of the net40 main assembly fails there with a bare MSB4181.
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0'
+          dotnet-version: '10.0.1xx'
 
       - uses: actions/setup-python@v5
         with:
@@ -31,7 +34,10 @@ jobs:
           elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
             echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            # NuGet parses InformationalVersion during restore, so an untagged
+            # build still has to emit a parseable version. A bare "dev-<sha>"
+            # has no numeric core and fails the whole restore.
+            echo "version=0.0.0-dev.g${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and stage
