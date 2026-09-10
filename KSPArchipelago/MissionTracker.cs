@@ -83,6 +83,26 @@ namespace KSPArchipelago
 
         private const float MissionScienceBonus = 5f;
 
+        /// <summary>
+        /// True for a vessel that is fully UNMANNED (zero crew) yet still
+        /// controllable — i.e. it has a working command probe core, power, and a
+        /// radio link home. KSP's CurrentControlLevel folds all three together
+        /// (it reads NONE without a probe core, without electric charge, or with
+        /// no CommNet connection to home), so this one check covers the whole
+        /// "0 crew but controllable" requirement.
+        ///
+        /// This is the probe-only counterpart of the crew&gt;0 gate on "Crewed
+        /// Landing". Detection is per-vessel: an ejected probe is its own Vessel,
+        /// so a crewed mothership that drops a satellite is judged on the
+        /// satellite's own crew/control state, not the mothership's.
+        /// </summary>
+        private static bool IsUnmannedControllable(Vessel v)
+        {
+            if (v == null) return false;
+            return v.GetCrewCount() == 0 &&
+                   v.CurrentControlLevel != Vessel.ControlLevel.NONE;
+        }
+
         // volatile: assigned on the console thread (OnConnect/OnDisconnect),
         // read on the main thread and the send worker.
         private volatile ArchipelagoSession session;
@@ -872,6 +892,8 @@ namespace KSPArchipelago
         {
             if (!FlightMilestoneSource.IsMissionVessel(vessel)) return;
             ReportBodyEvent(body.name, "Flyby");
+            if (IsUnmannedControllable(vessel))
+                ReportBodyEvent(body.name, "Unmanned Flyby");
         }
 
         private void OnVesselSOIChanged(GameEvents.HostedFromToAction<Vessel, CelestialBody> data)
@@ -912,13 +934,22 @@ namespace KSPArchipelago
             }
 
             if (arrivingFromParent)
+            {
                 ReportBodyEvent(to.name, "Flyby");
+                // Server does not ship an Unmanned Flyby for the seed's home body
+                // (home flyby is the weird interplanetary-return case); reporting
+                // it there resolves to an unknown name and no-ops safely.
+                if (IsUnmannedControllable(data.host))
+                    ReportBodyEvent(to.name, "Unmanned Flyby");
+            }
         }
 
         private void OnOrbit(Vessel vessel, CelestialBody body)
         {
             if (!FlightMilestoneSource.IsMissionVessel(vessel)) return;
             ReportBodyEvent(body.name, "Orbit");
+            if (IsUnmannedControllable(vessel))
+                ReportBodyEvent(body.name, "Orbital Probe");
         }
 
         private void OnEscape(Vessel vessel, CelestialBody body)
