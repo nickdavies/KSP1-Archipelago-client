@@ -268,6 +268,12 @@ namespace KSPArchipelago
         /// staging model assumes the toggle is open. Blank it on the prefab so the
         /// editor toggle always shows; the toggle itself stays default-off as in
         /// stock, so the player still enables crossfeed per decoupler.
+        ///
+        /// Walk Modules directly rather than FindModulesImplementing: PartLoader
+        /// keeps all nine built-in EVA/flag prefabs in LoadedPartsList, but only
+        /// Awake()s the ones whose PART config loaded. Without a DLC, the
+        /// kerbalEVAVintage/Future prefabs are never Awake()d, so Part's module
+        /// cache is null and FindModulesImplementing throws (issue #12).
         /// </summary>
         public static void ScrubTechTree()
         {
@@ -275,9 +281,13 @@ namespace KSPArchipelago
             {
                 if (part.TechRequired != "inaccessable")
                     part.TechRequired = "inaccessable";
-                if (part.partPrefab == null) continue;
-                foreach (ModuleToggleCrossfeed xf in part.partPrefab.FindModulesImplementing<ModuleToggleCrossfeed>())
-                    xf.techRequired = "";
+                Part prefab = part.partPrefab;
+                if (prefab == null || prefab.Modules == null) continue;
+                for (int m = 0; m < prefab.Modules.Count; m++)
+                {
+                    ModuleToggleCrossfeed xf = prefab.Modules[m] as ModuleToggleCrossfeed;
+                    if (xf != null) xf.techRequired = "";
+                }
             }
         }
 
